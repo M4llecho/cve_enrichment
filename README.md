@@ -39,6 +39,8 @@ DB_USER=root
 DB_PASSWORD=your_password
 DB_NAME=cve_enrichment
 
+SSL_VERIFY=true
+
 # Opzionale: aumenta il rate limit NVD da 5 a 50 req/30sec
 NVD_API_KEY=your_api_key
 ```
