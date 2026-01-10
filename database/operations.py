@@ -1,0 +1,645 @@
+"""
+Database CRUD operations for CVE Enrichment System.
+"""
+
+import json
+import logging
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
+from contextlib import contextmanager
+
+import mariadb
+
+from .schema import get_db_connection
+
+logger = logging.getLogger(__name__)
+
+
+class DatabaseManager:
+    """Manager class for database operations."""
+
+    def __init__(self):
+        self._conn = None
+
+    @contextmanager
+    def connection(self):
+        """Context manager for database connections."""
+        conn = get_db_connection()
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+    @contextmanager
+    def cursor(self, conn: Optional[mariadb.Connection] = None):
+        """Context manager for database cursors."""
+        if conn is None:
+            with self.connection() as conn:
+                cursor = conn.cursor()
+                try:
+                    yield cursor, conn
+                finally:
+                    cursor.close()
+        else:
+            cursor = conn.cursor()
+            try:
+                yield cursor, conn
+            finally:
+                cursor.close()
+
+    # ==================== CWE Details Operations ====================
+
+    def insert_cwe_details(self, cwe_data: List[Dict[str, str]]) -> int:
+        """Insert or update CWE details in bulk."""
+        if not cwe_data:
+            return 0
+
+        sql = """
+            INSERT INTO cwe_details (cwe_id, cwe_name, description)
+            VALUES (?, ?, ?)
+            ON DUPLICATE KEY UPDATE
+                cwe_name = VALUES(cwe_name),
+                description = VALUES(description)
+        """
+
+        inserted = 0
+        with self.connection() as conn:
+            cursor = conn.cursor()
+            try:
+                for cwe in cwe_data:
+                    cursor.execute(sql, (
+                        cwe.get("cwe_id"),
+                        cwe.get("cwe_name"),
+                        cwe.get("description")
+                    ))
+                    inserted += 1
+                conn.commit()
+                logger.info(f"Inserted/updated {inserted} CWE details")
+            except mariadb.Error as e:
+                logger.error(f"Error inserting CWE details: {e}")
+                conn.rollback()
+                raise
+            finally:
+                cursor.close()
+
+        return inserted
+
+    def get_cwe_name(self, cwe_id: str) -> Optional[str]:
+        """Get CWE name by ID."""
+        with self.cursor() as (cursor, conn):
+            cursor.execute(
+                "SELECT cwe_name FROM cwe_details WHERE cwe_id = ?",
+                (cwe_id,)
+            )
+            result = cursor.fetchone()
+            return result[0] if result else None
+
+    # ==================== Mapping Tables Operations ====================
+
+    def clear_mapping_tables(self) -> None:
+        """Clear all mapping tables for fresh import."""
+        tables = ["map_cwe_capec", "map_capec_technique", "map_technique_tactic"]
+        with self.connection() as conn:
+            cursor = conn.cursor()
+            try:
+                for table in tables:
+                    cursor.execute(f"TRUNCATE TABLE {table}")
+                conn.commit()
+                logger.info("All mapping tables cleared")
+            except mariadb.Error as e:
+                logger.error(f"Error clearing mapping tables: {e}")
+                conn.rollback()
+                raise
+            finally:
+                cursor.close()
+
+    def insert_cwe_capec_mappings(self, mappings: List[Tuple[str, str]]) -> int:
+        """Insert CWE to CAPEC mappings in bulk."""
+        if not mappings:
+            return 0
+
+        sql = """
+            INSERT IGNORE INTO map_cwe_capec (cwe_id, capec_id)
+            VALUES (?, ?)
+        """
+
+        with self.connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.executemany(sql, mappings)
+                conn.commit()
+                inserted = cursor.rowcount
+                logger.info(f"Inserted {inserted} CWE-CAPEC mappings")
+                return inserted
+            except mariadb.Error as e:
+                logger.error(f"Error inserting CWE-CAPEC mappings: {e}")
+                conn.rollback()
+                raise
+            finally:
+                cursor.close()
+
+    def insert_capec_technique_mappings(
+        self, mappings: List[Tuple[str, str, str]]
+    ) -> int:
+        """Insert CAPEC to Technique mappings in bulk."""
+        if not mappings:
+            return 0
+
+        sql = """
+            INSERT INTO map_capec_technique (capec_id, technique_id, technique_name)
+            VALUES (?, ?, ?)
+            ON DUPLICATE KEY UPDATE technique_name = VALUES(technique_name)
+        """
+
+        with self.connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.executemany(sql, mappings)
+                conn.commit()
+                inserted = cursor.rowcount
+                logger.info(f"Inserted {inserted} CAPEC-Technique mappings")
+                return inserted
+            except mariadb.Error as e:
+                logger.error(f"Error inserting CAPEC-Technique mappings: {e}")
+                conn.rollback()
+                raise
+            finally:
+                cursor.close()
+
+    def insert_technique_tactic_mappings(
+        self, mappings: List[Tuple[str, str, str]]
+    ) -> int:
+        """Insert Technique to Tactic mappings in bulk."""
+        if not mappings:
+            return 0
+
+        sql = """
+            INSERT INTO map_technique_tactic (technique_id, tactic_id, tactic_name)
+            VALUES (?, ?, ?)
+            ON DUPLICATE KEY UPDATE tactic_name = VALUES(tactic_name)
+        """
+
+        with self.connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.executemany(sql, mappings)
+                conn.commit()
+                inserted = cursor.rowcount
+                logger.info(f"Inserted {inserted} Technique-Tactic mappings")
+                return inserted
+            except mariadb.Error as e:
+                logger.error(f"Error inserting Technique-Tactic mappings: {e}")
+                conn.rollback()
+                raise
+            finally:
+                cursor.close()
+
+    # ==================== Enrichment Chain Queries ====================
+
+    def get_capec_for_cwe(self, cwe_id: str) -> List[str]:
+        """Get CAPEC IDs for a given CWE."""
+        with self.cursor() as (cursor, conn):
+            cursor.execute(
+                "SELECT capec_id FROM map_cwe_capec WHERE cwe_id = ?",
+                (cwe_id,)
+            )
+            return [row[0] for row in cursor.fetchall()]
+
+    def get_techniques_for_capec(self, capec_id: str) -> List[Tuple[str, str]]:
+        """Get Technique IDs and names for a given CAPEC."""
+        with self.cursor() as (cursor, conn):
+            cursor.execute(
+                "SELECT technique_id, technique_name FROM map_capec_technique "
+                "WHERE capec_id = ?",
+                (capec_id,)
+            )
+            return cursor.fetchall()
+
+    def get_tactics_for_technique(self, technique_id: str) -> List[Tuple[str, str]]:
+        """Get Tactic IDs and names for a given Technique."""
+        with self.cursor() as (cursor, conn):
+            cursor.execute(
+                "SELECT tactic_id, tactic_name FROM map_technique_tactic "
+                "WHERE technique_id = ?",
+                (technique_id,)
+            )
+            return cursor.fetchall()
+
+    def get_full_chain_for_cwe(self, cwe_id: str) -> Dict[str, Any]:
+        """Get the complete enrichment chain for a CWE."""
+        chain = {
+            "capec_ids": [],
+            "technique_ids": set(),
+            "technique_names": set(),
+            "tactic_ids": set(),
+            "tactic_names": set(),
+        }
+
+        capec_ids = self.get_capec_for_cwe(cwe_id)
+        chain["capec_ids"] = capec_ids
+
+        for capec_id in capec_ids:
+            techniques = self.get_techniques_for_capec(capec_id)
+            for tech_id, tech_name in techniques:
+                chain["technique_ids"].add(tech_id)
+                if tech_name:
+                    chain["technique_names"].add(tech_name)
+
+                tactics = self.get_tactics_for_technique(tech_id)
+                for tactic_id, tactic_name in tactics:
+                    chain["tactic_ids"].add(tactic_id)
+                    if tactic_name:
+                        chain["tactic_names"].add(tactic_name)
+
+        # Convert sets to sorted lists
+        chain["technique_ids"] = sorted(chain["technique_ids"])
+        chain["technique_names"] = sorted(chain["technique_names"])
+        chain["tactic_ids"] = sorted(chain["tactic_ids"])
+        chain["tactic_names"] = sorted(chain["tactic_names"])
+
+        return chain
+
+    # ==================== CVE Enriched Operations ====================
+
+    def insert_enriched_cve(self, cve_data: Dict[str, Any]) -> bool:
+        """Insert or update an enriched CVE."""
+        sql = """
+            INSERT INTO cve_enriched (
+                cve_id, description, published_date, last_modified,
+                cvss_score, cvss_vector, cvss_severity, cvss_version,
+                vuln_status,
+                cwe_id, cwe_name,
+                capec_ids, technique_ids, technique_names,
+                tactic_ids, tactic_names,
+                epss_score, epss_percentile,
+                in_kev, kev_date_added, kev_due_date, kev_ransomware_use,
+                has_exploit, exploit_count, has_patch, reference_count,
+                cpe,
+                last_enriched_at
+            ) VALUES (
+                ?, ?, ?, ?,
+                ?, ?, ?, ?,
+                ?,
+                ?, ?,
+                ?, ?, ?,
+                ?, ?,
+                ?, ?,
+                ?, ?, ?, ?,
+                ?, ?, ?, ?,
+                ?,
+                NOW()
+            )
+            ON DUPLICATE KEY UPDATE
+                description = VALUES(description),
+                published_date = VALUES(published_date),
+                last_modified = VALUES(last_modified),
+                cvss_score = VALUES(cvss_score),
+                cvss_vector = VALUES(cvss_vector),
+                cvss_severity = VALUES(cvss_severity),
+                cvss_version = VALUES(cvss_version),
+                vuln_status = VALUES(vuln_status),
+                cwe_id = VALUES(cwe_id),
+                cwe_name = VALUES(cwe_name),
+                capec_ids = VALUES(capec_ids),
+                technique_ids = VALUES(technique_ids),
+                technique_names = VALUES(technique_names),
+                tactic_ids = VALUES(tactic_ids),
+                tactic_names = VALUES(tactic_names),
+                epss_score = VALUES(epss_score),
+                epss_percentile = VALUES(epss_percentile),
+                in_kev = VALUES(in_kev),
+                kev_date_added = VALUES(kev_date_added),
+                kev_due_date = VALUES(kev_due_date),
+                kev_ransomware_use = VALUES(kev_ransomware_use),
+                has_exploit = VALUES(has_exploit),
+                exploit_count = VALUES(exploit_count),
+                has_patch = VALUES(has_patch),
+                reference_count = VALUES(reference_count),
+                cpe = VALUES(cpe),
+                last_enriched_at = NOW()
+        """
+
+        # Convert lists to JSON strings
+        capec_ids = json.dumps(cve_data.get("capec_ids", []))
+        technique_ids = json.dumps(cve_data.get("technique_ids", []))
+        technique_names = json.dumps(cve_data.get("technique_names", []))
+        tactic_ids = json.dumps(cve_data.get("tactic_ids", []))
+        tactic_names = json.dumps(cve_data.get("tactic_names", []))
+        cpe = json.dumps(cve_data.get("cpe", []))
+
+        with self.connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(sql, (
+                    cve_data.get("cve_id"),
+                    cve_data.get("description"),
+                    cve_data.get("published_date"),
+                    cve_data.get("last_modified"),
+                    cve_data.get("cvss_score"),
+                    cve_data.get("cvss_vector"),
+                    cve_data.get("cvss_severity"),
+                    cve_data.get("cvss_version"),
+                    cve_data.get("vuln_status"),
+                    cve_data.get("cwe_id"),
+                    cve_data.get("cwe_name"),
+                    capec_ids,
+                    technique_ids,
+                    technique_names,
+                    tactic_ids,
+                    tactic_names,
+                    cve_data.get("epss_score"),
+                    cve_data.get("epss_percentile"),
+                    cve_data.get("in_kev", False),
+                    cve_data.get("kev_date_added"),
+                    cve_data.get("kev_due_date"),
+                    cve_data.get("kev_ransomware_use"),
+                    cve_data.get("has_exploit", False),
+                    cve_data.get("exploit_count", 0),
+                    cve_data.get("has_patch", False),
+                    cve_data.get("reference_count", 0),
+                    cpe,
+                ))
+                conn.commit()
+                return True
+            except mariadb.Error as e:
+                logger.error(f"Error inserting enriched CVE {cve_data.get('cve_id')}: {e}")
+                conn.rollback()
+                return False
+            finally:
+                cursor.close()
+
+    def insert_enriched_cves_batch(self, cves: List[Dict[str, Any]]) -> int:
+        """Insert multiple enriched CVEs in a batch."""
+        if not cves:
+            return 0
+
+        sql = """
+            INSERT INTO cve_enriched (
+                cve_id, description, published_date, last_modified,
+                cvss_score, cvss_vector, cvss_severity, cvss_version,
+                vuln_status,
+                cwe_id, cwe_name,
+                capec_ids, technique_ids, technique_names,
+                tactic_ids, tactic_names,
+                epss_score, epss_percentile,
+                in_kev, kev_date_added, kev_due_date, kev_ransomware_use,
+                has_exploit, exploit_count, has_patch, reference_count,
+                cpe,
+                last_enriched_at
+            ) VALUES (
+                ?, ?, ?, ?,
+                ?, ?, ?, ?,
+                ?,
+                ?, ?,
+                ?, ?, ?,
+                ?, ?,
+                ?, ?,
+                ?, ?, ?, ?,
+                ?, ?, ?, ?,
+                ?,
+                NOW()
+            )
+            ON DUPLICATE KEY UPDATE
+                description = VALUES(description),
+                published_date = VALUES(published_date),
+                last_modified = VALUES(last_modified),
+                cvss_score = VALUES(cvss_score),
+                cvss_vector = VALUES(cvss_vector),
+                cvss_severity = VALUES(cvss_severity),
+                cvss_version = VALUES(cvss_version),
+                vuln_status = VALUES(vuln_status),
+                cwe_id = VALUES(cwe_id),
+                cwe_name = VALUES(cwe_name),
+                capec_ids = VALUES(capec_ids),
+                technique_ids = VALUES(technique_ids),
+                technique_names = VALUES(technique_names),
+                tactic_ids = VALUES(tactic_ids),
+                tactic_names = VALUES(tactic_names),
+                epss_score = VALUES(epss_score),
+                epss_percentile = VALUES(epss_percentile),
+                in_kev = VALUES(in_kev),
+                kev_date_added = VALUES(kev_date_added),
+                kev_due_date = VALUES(kev_due_date),
+                kev_ransomware_use = VALUES(kev_ransomware_use),
+                has_exploit = VALUES(has_exploit),
+                exploit_count = VALUES(exploit_count),
+                has_patch = VALUES(has_patch),
+                reference_count = VALUES(reference_count),
+                cpe = VALUES(cpe),
+                last_enriched_at = NOW()
+        """
+
+        values = []
+        for cve in cves:
+            values.append((
+                cve.get("cve_id"),
+                cve.get("description"),
+                cve.get("published_date"),
+                cve.get("last_modified"),
+                cve.get("cvss_score"),
+                cve.get("cvss_vector"),
+                cve.get("cvss_severity"),
+                cve.get("cvss_version"),
+                cve.get("vuln_status"),
+                cve.get("cwe_id"),
+                cve.get("cwe_name"),
+                json.dumps(cve.get("capec_ids", [])),
+                json.dumps(cve.get("technique_ids", [])),
+                json.dumps(cve.get("technique_names", [])),
+                json.dumps(cve.get("tactic_ids", [])),
+                json.dumps(cve.get("tactic_names", [])),
+                cve.get("epss_score"),
+                cve.get("epss_percentile"),
+                cve.get("in_kev", False),
+                cve.get("kev_date_added"),
+                cve.get("kev_due_date"),
+                cve.get("kev_ransomware_use"),
+                cve.get("has_exploit", False),
+                cve.get("exploit_count", 0),
+                cve.get("has_patch", False),
+                cve.get("reference_count", 0),
+                json.dumps(cve.get("cpe", [])),
+            ))
+
+        with self.connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.executemany(sql, values)
+                conn.commit()
+                return len(values)
+            except mariadb.Error as e:
+                logger.error(f"Error batch inserting enriched CVEs: {e}")
+                conn.rollback()
+                raise
+            finally:
+                cursor.close()
+
+    def get_enriched_cve(self, cve_id: str) -> Optional[Dict[str, Any]]:
+        """Get an enriched CVE by ID."""
+        sql = "SELECT * FROM cve_enriched WHERE cve_id = ?"
+
+        with self.cursor() as (cursor, conn):
+            cursor.execute(sql, (cve_id,))
+            row = cursor.fetchone()
+
+            if not row:
+                return None
+
+            columns = [desc[0] for desc in cursor.description]
+            result = dict(zip(columns, row))
+
+            # Parse JSON fields
+            for field in ["capec_ids", "technique_ids", "technique_names",
+                          "tactic_ids", "tactic_names", "cpe"]:
+                if result.get(field):
+                    try:
+                        result[field] = json.loads(result[field])
+                    except (json.JSONDecodeError, TypeError):
+                        result[field] = []
+
+            return result
+
+    def cve_exists(self, cve_id: str) -> bool:
+        """Check if a CVE exists in the enriched table."""
+        with self.cursor() as (cursor, conn):
+            cursor.execute(
+                "SELECT 1 FROM cve_enriched WHERE cve_id = ?",
+                (cve_id,)
+            )
+            return cursor.fetchone() is not None
+
+    def get_all_cve_ids(self) -> List[str]:
+        """Get all CVE IDs from the enriched table."""
+        with self.cursor() as (cursor, conn):
+            cursor.execute("SELECT cve_id FROM cve_enriched ORDER BY cve_id")
+            return [row[0] for row in cursor.fetchall()]
+
+    def get_cve_count(self) -> int:
+        """Get the total count of enriched CVEs."""
+        with self.cursor() as (cursor, conn):
+            cursor.execute("SELECT COUNT(*) FROM cve_enriched")
+            result = cursor.fetchone()
+            return result[0] if result else 0
+
+    def get_kev_cves(self) -> List[str]:
+        """Get all CVE IDs that are in KEV."""
+        with self.cursor() as (cursor, conn):
+            cursor.execute(
+                "SELECT cve_id FROM cve_enriched WHERE in_kev = TRUE"
+            )
+            return [row[0] for row in cursor.fetchall()]
+
+    def get_high_risk_cves(
+        self,
+        min_cvss: float = 7.0,
+        min_epss: float = 0.1
+    ) -> List[Dict[str, Any]]:
+        """Get high-risk CVEs based on CVSS and EPSS scores."""
+        sql = """
+            SELECT cve_id, cvss_v3_score, epss_score, in_kev
+            FROM cve_enriched
+            WHERE cvss_v3_score >= ? OR epss_score >= ? OR in_kev = TRUE
+            ORDER BY
+                in_kev DESC,
+                epss_score DESC,
+                cvss_v3_score DESC
+        """
+
+        with self.cursor() as (cursor, conn):
+            cursor.execute(sql, (min_cvss, min_epss))
+            columns = ["cve_id", "cvss_v3_score", "epss_score", "in_kev"]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+    def get_last_modified(self) -> Optional[datetime]:
+        """
+        Get the most recent last_modified date from the enriched CVEs.
+
+        Returns:
+            The most recent last_modified datetime, or None if no CVEs exist.
+        """
+        with self.cursor() as (cursor, conn):
+            cursor.execute(
+                "SELECT MAX(last_modified) FROM cve_enriched"
+            )
+            result = cursor.fetchone()
+            return result[0] if result and result[0] else None
+
+    def update_epss_scores_batch(
+        self,
+        scores: List[Tuple[str, float, float]]
+    ) -> int:
+        """
+        Update only EPSS scores for existing CVEs.
+
+        Args:
+            scores: List of (cve_id, epss_score, epss_percentile) tuples
+
+        Returns:
+            Number of updated rows
+        """
+        if not scores:
+            return 0
+
+        sql = """
+            UPDATE cve_enriched
+            SET epss_score = ?, epss_percentile = ?
+            WHERE cve_id = ?
+        """
+
+        updated = 0
+        with self.connection() as conn:
+            cursor = conn.cursor()
+            try:
+                # Reorder tuple: (score, percentile, cve_id) for SQL
+                values = [(s[1], s[2], s[0]) for s in scores]
+                cursor.executemany(sql, values)
+                conn.commit()
+                updated = cursor.rowcount
+            except mariadb.Error as e:
+                logger.error(f"Error updating EPSS scores: {e}")
+                conn.rollback()
+                raise
+            finally:
+                cursor.close()
+
+        return updated
+
+    def update_kev_status_batch(
+        self,
+        kev_data: List[Tuple[str, bool, Optional[datetime], Optional[datetime], Optional[bool]]]
+    ) -> int:
+        """
+        Update only KEV status for existing CVEs.
+
+        Args:
+            kev_data: List of (cve_id, in_kev, date_added, due_date, ransomware_use) tuples
+
+        Returns:
+            Number of updated rows
+        """
+        if not kev_data:
+            return 0
+
+        sql = """
+            UPDATE cve_enriched
+            SET in_kev = ?, kev_date_added = ?, kev_due_date = ?, kev_ransomware_use = ?
+            WHERE cve_id = ?
+        """
+
+        updated = 0
+        with self.connection() as conn:
+            cursor = conn.cursor()
+            try:
+                # Reorder tuple for SQL: (in_kev, date_added, due_date, ransomware, cve_id)
+                values = [(k[1], k[2], k[3], k[4], k[0]) for k in kev_data]
+                cursor.executemany(sql, values)
+                conn.commit()
+                updated = cursor.rowcount
+            except mariadb.Error as e:
+                logger.error(f"Error updating KEV status: {e}")
+                conn.rollback()
+                raise
+            finally:
+                cursor.close()
+
+        return updated
