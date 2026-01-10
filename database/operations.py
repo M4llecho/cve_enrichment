@@ -228,7 +228,7 @@ class DatabaseManager:
     def get_full_chain_for_cwe(self, cwe_id: str) -> Dict[str, Any]:
         """Get the complete enrichment chain for a CWE."""
         chain = {
-            "capec_ids": [],
+            "capec_ids": set(),
             "technique_ids": set(),
             "technique_names": set(),
             "tactic_ids": set(),
@@ -236,7 +236,7 @@ class DatabaseManager:
         }
 
         capec_ids = self.get_capec_for_cwe(cwe_id)
-        chain["capec_ids"] = capec_ids
+        chain["capec_ids"].update(capec_ids)
 
         for capec_id in capec_ids:
             techniques = self.get_techniques_for_capec(capec_id)
@@ -252,6 +252,7 @@ class DatabaseManager:
                         chain["tactic_names"].add(tactic_name)
 
         # Convert sets to sorted lists
+        chain["capec_ids"] = sorted(chain["capec_ids"])
         chain["technique_ids"] = sorted(chain["technique_ids"])
         chain["technique_names"] = sorted(chain["technique_names"])
         chain["tactic_ids"] = sorted(chain["tactic_ids"])
