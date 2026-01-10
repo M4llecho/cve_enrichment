@@ -246,18 +246,15 @@ class NVDDownloader(BaseDownloader):
                     cvss_severity = "LOW"
             cvss_version = "2.0"
 
-        # Get CWE
-        cwe_id = None
+        # Get all CWEs (a CVE can have multiple CWEs)
+        cwe_ids = []
         weaknesses = cve.get("weaknesses", [])
         for weakness in weaknesses:
             descriptions = weakness.get("description", [])
             for desc in descriptions:
                 value = desc.get("value", "")
-                if value.startswith("CWE-"):
-                    cwe_id = value
-                    break
-            if cwe_id:
-                break
+                if value.startswith("CWE-") and value not in cwe_ids:
+                    cwe_ids.append(value)
 
         # Get references with Exploit and Patch tags
         references = cve.get("references", [])
@@ -296,7 +293,7 @@ class NVDDownloader(BaseDownloader):
             "cvss_severity": cvss_severity,
             "cvss_version": cvss_version,
             "vuln_status": vuln_status,
-            "cwe_id": cwe_id,
+            "cwe_ids": cwe_ids,
             "has_exploit": exploit_count > 0,
             "exploit_count": exploit_count,
             "has_patch": has_patch,

@@ -268,7 +268,7 @@ class DatabaseManager:
                 cve_id, description, published_date, last_modified,
                 cvss_score, cvss_vector, cvss_severity, cvss_version,
                 vuln_status,
-                cwe_id, cwe_name,
+                cwe_ids, cwe_names,
                 capec_ids, technique_ids, technique_names,
                 tactic_ids, tactic_names,
                 epss_score, epss_percentile,
@@ -298,8 +298,8 @@ class DatabaseManager:
                 cvss_severity = VALUES(cvss_severity),
                 cvss_version = VALUES(cvss_version),
                 vuln_status = VALUES(vuln_status),
-                cwe_id = VALUES(cwe_id),
-                cwe_name = VALUES(cwe_name),
+                cwe_ids = VALUES(cwe_ids),
+                cwe_names = VALUES(cwe_names),
                 capec_ids = VALUES(capec_ids),
                 technique_ids = VALUES(technique_ids),
                 technique_names = VALUES(technique_names),
@@ -320,6 +320,8 @@ class DatabaseManager:
         """
 
         # Convert lists to JSON strings
+        cwe_ids = json.dumps(cve_data.get("cwe_ids", []))
+        cwe_names = json.dumps(cve_data.get("cwe_names", []))
         capec_ids = json.dumps(cve_data.get("capec_ids", []))
         technique_ids = json.dumps(cve_data.get("technique_ids", []))
         technique_names = json.dumps(cve_data.get("technique_names", []))
@@ -340,8 +342,8 @@ class DatabaseManager:
                     cve_data.get("cvss_severity"),
                     cve_data.get("cvss_version"),
                     cve_data.get("vuln_status"),
-                    cve_data.get("cwe_id"),
-                    cve_data.get("cwe_name"),
+                    cwe_ids,
+                    cwe_names,
                     capec_ids,
                     technique_ids,
                     technique_names,
@@ -378,7 +380,7 @@ class DatabaseManager:
                 cve_id, description, published_date, last_modified,
                 cvss_score, cvss_vector, cvss_severity, cvss_version,
                 vuln_status,
-                cwe_id, cwe_name,
+                cwe_ids, cwe_names,
                 capec_ids, technique_ids, technique_names,
                 tactic_ids, tactic_names,
                 epss_score, epss_percentile,
@@ -408,8 +410,8 @@ class DatabaseManager:
                 cvss_severity = VALUES(cvss_severity),
                 cvss_version = VALUES(cvss_version),
                 vuln_status = VALUES(vuln_status),
-                cwe_id = VALUES(cwe_id),
-                cwe_name = VALUES(cwe_name),
+                cwe_ids = VALUES(cwe_ids),
+                cwe_names = VALUES(cwe_names),
                 capec_ids = VALUES(capec_ids),
                 technique_ids = VALUES(technique_ids),
                 technique_names = VALUES(technique_names),
@@ -441,8 +443,8 @@ class DatabaseManager:
                 cve.get("cvss_severity"),
                 cve.get("cvss_version"),
                 cve.get("vuln_status"),
-                cve.get("cwe_id"),
-                cve.get("cwe_name"),
+                json.dumps(cve.get("cwe_ids", [])),
+                json.dumps(cve.get("cwe_names", [])),
                 json.dumps(cve.get("capec_ids", [])),
                 json.dumps(cve.get("technique_ids", [])),
                 json.dumps(cve.get("technique_names", [])),
@@ -489,8 +491,8 @@ class DatabaseManager:
             result = dict(zip(columns, row))
 
             # Parse JSON fields
-            for field in ["capec_ids", "technique_ids", "technique_names",
-                          "tactic_ids", "tactic_names", "cpe"]:
+            for field in ["cwe_ids", "cwe_names", "capec_ids", "technique_ids",
+                          "technique_names", "tactic_ids", "tactic_names", "cpe"]:
                 if result.get(field):
                     try:
                         result[field] = json.loads(result[field])

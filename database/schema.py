@@ -59,9 +59,9 @@ CREATE TABLE IF NOT EXISTS cve_enriched (
     -- Vulnerability status (Analyzed, Modified, Rejected, etc.)
     vuln_status VARCHAR(50),
 
-    -- CWE
-    cwe_id VARCHAR(20),
-    cwe_name VARCHAR(255),
+    -- CWE (supports multiple CWEs per CVE)
+    cwe_ids JSON,
+    cwe_names JSON,
 
     -- CAPEC (JSON array)
     capec_ids JSON,
@@ -94,7 +94,6 @@ CREATE TABLE IF NOT EXISTS cve_enriched (
     -- Metadata
     last_enriched_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 
-    INDEX idx_cwe_id (cwe_id),
     INDEX idx_cvss_score (cvss_score),
     INDEX idx_cvss_version (cvss_version),
     INDEX idx_vuln_status (vuln_status),

@@ -135,21 +135,45 @@ class CVEEnricher:
 
         enriched = cve_data.copy()
 
-        # Get CWE name
-        cwe_id = enriched.get("cwe_id")
-        if cwe_id:
-            cwe_name = self.db.get_cwe_name(cwe_id)
-            enriched["cwe_name"] = cwe_name
+        # Get all CWE IDs (a CVE can have multiple CWEs)
+        cwe_ids = enriched.get("cwe_ids", [])
 
-            # Get enrichment chain (CAPEC -> Technique -> Tactic)
-            chain = self.db.get_full_chain_for_cwe(cwe_id)
-            enriched["capec_ids"] = chain["capec_ids"]
-            enriched["technique_ids"] = chain["technique_ids"]
-            enriched["technique_names"] = chain["technique_names"]
-            enriched["tactic_ids"] = chain["tactic_ids"]
-            enriched["tactic_names"] = chain["tactic_names"]
+        if cwe_ids:
+            # Get CWE names for all CWEs
+            cwe_names = []
+            for cid in cwe_ids:
+                name = self.db.get_cwe_name(cid)
+                if name:
+                    cwe_names.append(name)
+                else:
+                    cwe_names.append(cid)  # Fallback to ID if name not found
+
+            enriched["cwe_ids"] = cwe_ids
+            enriched["cwe_names"] = cwe_names
+
+            # Get enrichment chain for ALL CWEs (CAPEC -> Technique -> Tactic)
+            all_capec_ids = set()
+            all_technique_ids = set()
+            all_technique_names = set()
+            all_tactic_ids = set()
+            all_tactic_names = set()
+
+            for cid in cwe_ids:
+                chain = self.db.get_full_chain_for_cwe(cid)
+                all_capec_ids.update(chain["capec_ids"])
+                all_technique_ids.update(chain["technique_ids"])
+                all_technique_names.update(chain["technique_names"])
+                all_tactic_ids.update(chain["tactic_ids"])
+                all_tactic_names.update(chain["tactic_names"])
+
+            enriched["capec_ids"] = sorted(all_capec_ids)
+            enriched["technique_ids"] = sorted(all_technique_ids)
+            enriched["technique_names"] = sorted(all_technique_names)
+            enriched["tactic_ids"] = sorted(all_tactic_ids)
+            enriched["tactic_names"] = sorted(all_tactic_names)
         else:
-            enriched["cwe_name"] = None
+            enriched["cwe_ids"] = []
+            enriched["cwe_names"] = []
             enriched["capec_ids"] = []
             enriched["technique_ids"] = []
             enriched["technique_names"] = []
@@ -586,8 +610,14 @@ class CVEEnricher:
         print(f"Vector: {cve.get('cvss_vector')}")
 
         print(f"\n--- CWE ---")
-        print(f"ID: {cve.get('cwe_id')}")
-        print(f"Name: {cve.get('cwe_name')}")
+        cwe_ids = cve.get('cwe_ids', [])
+        cwe_names = cve.get('cwe_names', [])
+        if cwe_ids:
+            for i, cid in enumerate(cwe_ids):
+                name = cwe_names[i] if i < len(cwe_names) else "Unknown"
+                print(f"  {cid}: {name}")
+        else:
+            print(f"  None")
 
         print(f"\n--- MITRE Chain ---")
         print(f"CAPEC IDs: {', '.join(cve.get('capec_ids', [])) or 'None'}")
