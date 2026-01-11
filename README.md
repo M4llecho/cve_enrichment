@@ -8,6 +8,7 @@ Sistema completo per arricchire CVE con dati da fonti esterne e salvarli in Mari
 - **Catena MITRE**: CWE → CAPEC → Tecniche ATT&CK → Tattiche
 - **EPSS score**: probabilità di exploit
 - **KEV**: verifica se la CVE è nella lista CISA Known Exploited Vulnerabilities
+- **Sigma Detection Rules**: regole di detection da SigmaHQ associate alle CVE
 
 ## Requisiti
 
@@ -135,10 +136,25 @@ python main.py update-kev --batch-size 2000
 python main.py update-kev -f
 ```
 
-### Aggiornamento Completo (CVE + EPSS + KEV)
+### Aggiornamento Sigma Detection Rules
 
 ```bash
-# Esegue in sequenza: update-cve, update-epss, update-kev
+# Aggiorna le regole Sigma per tutte le CVE nel database
+python main.py update-sigma
+# oppure
+python main.py --update-sigma
+
+# Con batch size personalizzato (default: 1000)
+python main.py update-sigma --batch-size 2000
+
+# Forza re-download anche se in cache
+python main.py update-sigma -f
+```
+
+### Aggiornamento Completo (CVE + EPSS + KEV + Sigma)
+
+```bash
+# Esegue in sequenza: update-cve, update-epss, update-kev, update-sigma
 python main.py update-all
 # oppure
 python main.py --update-all
@@ -187,7 +203,8 @@ python main.py stats
 | `update-cve` | Aggiornamento incrementale CVE via NVD API |
 | `update-epss` | Aggiorna score EPSS per tutte le CVE |
 | `update-kev` | Aggiorna stato KEV per tutte le CVE |
-| `update-all` | Aggiornamento completo: CVE + EPSS + KEV |
+| `update-sigma` | Aggiorna regole Sigma per tutte le CVE |
+| `update-all` | Aggiornamento completo: CVE + EPSS + KEV + Sigma |
 | `enrich-cve <CVE-ID>` | Arricchisce una singola CVE |
 | `enrich-list <file>` | Arricchisce CVE da file |
 | `show <CVE-ID>` | Mostra dati di una CVE |
@@ -217,14 +234,26 @@ cwe_details (cwe_id, cwe_name, description)
 cve_enriched (
     cve_id,
     description, published_date, last_modified,
-    cvss_v3_score, cvss_v3_vector, cvss_severity,
-    cwe_id, cwe_name,
+    cvss_score, cvss_vector, cvss_severity, cvss_version,
+    vuln_status,
+    cwe_ids, cwe_names,
     capec_ids, technique_ids, technique_names, tactic_ids, tactic_names,
     epss_score, epss_percentile,
     in_kev, kev_date_added, kev_due_date, kev_ransomware_use,
+    has_exploit, exploit_count, has_patch, reference_count,
+    cpe,
+    has_detection_rules, detection_rules_count, detection_rules,
     last_enriched_at
 )
 ```
+
+#### Campi Detection Rules
+
+| Campo | Tipo | Descrizione |
+|-------|------|-------------|
+| `has_detection_rules` | BOOLEAN | True se esistono regole Sigma per questa CVE |
+| `detection_rules_count` | INT | Numero di regole Sigma associate |
+| `detection_rules` | JSON | Array di regole: `[{"id", "title", "level", "filename"}]` |
 
 ## Fonti Dati
 
@@ -236,6 +265,7 @@ cve_enriched (
 | ATT&CK | https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/enterprise-attack.json | Technique → Tactic |
 | EPSS | https://api.first.org/data/v1/epss | Exploit probability |
 | KEV | https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json | Known exploited |
+| SigmaHQ | https://github.com/SigmaHQ/sigma | Detection rules |
 
 ## Note
 
@@ -254,14 +284,18 @@ Description: Apache Log4j2 2.0-beta9 through 2.15.0 (excludin...
 
 Published: 2021-12-10 10:15:00+00:00
 Last Modified: 2023-04-03 20:15:00+00:00
+Status: Analyzed
 
 --- CVSS ---
+Version: 3.1
 Score: 10.0 (CRITICAL)
 Vector: CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H
 
 --- CWE ---
-ID: CWE-502
-Name: Deserialization of Untrusted Data
+  CWE-20: Improper Input Validation
+  CWE-400: Uncontrolled Resource Consumption
+  CWE-502: Deserialization of Untrusted Data
+  CWE-917: Improper Neutralization of Special Elements...
 
 --- MITRE Chain ---
 CAPEC IDs: CAPEC-586
@@ -271,12 +305,29 @@ Tactics: Execution, Initial Access, Lateral Movement
 --- EPSS ---
 Score: 0.9756 (Percentile: 0.9990)
 
+--- Exploit/Patch ---
+Has Exploit: Yes (15 references)
+Has Patch: Yes
+
+--- CPE (Affected Products) ---
+  - cpe:2.3:a:apache:log4j:2.0:-:*:*:*:*:*:*
+  - cpe:2.3:a:apache:log4j:2.0:beta9:*:*:*:*:*:*
+  ... and 45 more
+
 --- KEV ---
 In KEV: Yes
 Date Added: 2021-12-10
 Due Date: 2021-12-24
 Ransomware Use: Yes
 
+--- Detection Rules (Sigma) ---
+Has Rules: Yes (12 rules)
+  - [high] Log4j RCE CVE-2021-44228 Generic
+  - [high] Log4j RCE CVE-2021-44228 in Fields
+  - [medium] Log4j Exploitation Indicators
+  ... and 9 more
+
+References: 25
 Last Enriched: 2024-01-15 14:30:00
 ============================================================
 ```

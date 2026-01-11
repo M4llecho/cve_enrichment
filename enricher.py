@@ -18,8 +18,9 @@ from downloaders import (
     ATTACKDownloader,
     EPSSDownloader,
     KEVDownloader,
+    SigmaDownloader,
 )
-from parsers import CWEParser, CAPECParser, ATTACKParser
+from parsers import CWEParser, CAPECParser, ATTACKParser, SigmaParser
 
 logger = logging.getLogger(__name__)
 
@@ -39,11 +40,13 @@ class CVEEnricher:
         self.attack_downloader = ATTACKDownloader()
         self.epss = EPSSDownloader()
         self.kev = KEVDownloader()
+        self.sigma = SigmaDownloader()
 
         # Parsers (initialized after download)
         self._cwe_parser: Optional[CWEParser] = None
         self._capec_parser: Optional[CAPECParser] = None
         self._attack_parser: Optional[ATTACKParser] = None
+        self._sigma_parser: Optional[SigmaParser] = None
 
     def download_all_sources(self, force: bool = False) -> None:
         """Download all external data sources."""
@@ -56,6 +59,7 @@ class CVEEnricher:
             ("ATT&CK", self.attack_downloader.download),
             ("EPSS", self.epss.download),
             ("KEV", self.kev.download),
+            ("Sigma", self.sigma.download),
         ]
 
         for name, download_func in sources:
@@ -202,7 +206,40 @@ class CVEEnricher:
             enriched["kev_due_date"] = None
             enriched["kev_ransomware_use"] = None
 
+        # Get Sigma detection rules
+        sigma_rules = self._get_sigma_rules(cve_id)
+        if sigma_rules:
+            enriched["has_detection_rules"] = True
+            enriched["detection_rules_count"] = len(sigma_rules)
+            enriched["detection_rules"] = sigma_rules
+        else:
+            enriched["has_detection_rules"] = False
+            enriched["detection_rules_count"] = 0
+            enriched["detection_rules"] = []
+
         return enriched
+
+    def _get_sigma_rules(self, cve_id: str) -> List[Dict[str, Any]]:
+        """
+        Get Sigma detection rules for a CVE.
+        Lazily initializes the Sigma parser and index on first call.
+
+        Args:
+            cve_id: CVE identifier
+
+        Returns:
+            List of rule info dicts
+        """
+        # Lazy load Sigma index
+        if self._sigma_parser is None:
+            rules_dir = self.sigma.get_rules_dir()
+            if not rules_dir:
+                logger.debug("Sigma rules not downloaded yet")
+                return []
+            self._sigma_parser = SigmaParser(rules_dir)
+            self._sigma_parser.build_cve_index()
+
+        return self._sigma_parser.get_rules_for_cve(cve_id)
 
     def enrich_single_cve(self, cve_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -568,6 +605,84 @@ class CVEEnricher:
         logger.info(f"KEV update complete. Total updated: {updated_count}")
         return updated_count
 
+    def update_sigma_rules(
+        self,
+        batch_size: int = 1000,
+        force_download: bool = False,
+    ) -> int:
+        """
+        Update Sigma detection rules for all existing CVEs in database.
+
+        Downloads SigmaHQ repository, parses rules to find CVE references,
+        and updates the detection_rules fields for matching CVEs.
+
+        Args:
+            batch_size: Number of CVEs to update per batch
+            force_download: Force re-download of Sigma rules
+
+        Returns:
+            Number of updated CVEs
+        """
+        import json
+
+        logger.info("Starting Sigma rules update...")
+
+        # Download and extract Sigma rules
+        logger.info("Downloading Sigma rules from SigmaHQ...")
+        self.sigma.download(force=force_download)
+
+        rules_dir = self.sigma.get_rules_dir()
+        if not rules_dir:
+            logger.error("Sigma rules directory not found")
+            return 0
+
+        # Initialize parser and build index
+        self._sigma_parser = SigmaParser(rules_dir)
+        cve_index = self._sigma_parser.build_cve_index()
+
+        logger.info(f"Found {len(cve_index)} CVEs with Sigma rules")
+
+        # Get all CVE IDs from database
+        all_cve_ids = self.db.get_all_cve_ids()
+        logger.info(f"Found {len(all_cve_ids)} CVEs in database")
+
+        updated_count = 0
+        batch = []
+
+        with tqdm(total=len(all_cve_ids), desc="Updating Sigma rules") as pbar:
+            for cve_id in all_cve_ids:
+                rules = cve_index.get(cve_id, [])
+                if rules:
+                    batch.append((
+                        cve_id,
+                        True,
+                        len(rules),
+                        json.dumps(rules)
+                    ))
+                else:
+                    # No rules - set to FALSE
+                    batch.append((cve_id, False, 0, json.dumps([])))
+
+                if len(batch) >= batch_size:
+                    self.db.update_sigma_rules_batch(batch)
+                    updated_count += len(batch)
+                    batch = []
+
+                pbar.update(1)
+
+        # Process remaining batch
+        if batch:
+            self.db.update_sigma_rules_batch(batch)
+            updated_count += len(batch)
+
+        # Log stats
+        stats = self._sigma_parser.get_stats()
+        logger.info(
+            f"Sigma update complete. Total updated: {updated_count}, "
+            f"CVEs with rules: {stats['unique_cves']}"
+        )
+        return updated_count
+
     def get_enrichment_stats(self) -> Dict[str, Any]:
         """Get statistics about the enrichment database."""
         from database.schema import get_table_count
@@ -579,6 +694,7 @@ class CVEEnricher:
             "capec_technique_mappings": get_table_count("map_capec_technique"),
             "technique_tactic_mappings": get_table_count("map_technique_tactic"),
             "kev_cves": len(self.db.get_kev_cves()),
+            "cves_with_detection_rules": len(self.db.get_cves_with_detection_rules()),
         }
 
         return stats
@@ -655,6 +771,21 @@ class CVEEnricher:
             print(f"Ransomware Use: {'Yes' if cve.get('kev_ransomware_use') else 'No'}")
         else:
             print("In KEV: No")
+
+        print(f"\n--- Detection Rules (Sigma) ---")
+        if cve.get('has_detection_rules'):
+            rules_count = cve.get('detection_rules_count', 0)
+            print(f"Has Rules: Yes ({rules_count} rule{'s' if rules_count != 1 else ''})")
+            rules = cve.get('detection_rules', [])
+            if rules and isinstance(rules, list):
+                for rule in rules[:5]:  # Show max 5
+                    level = rule.get('level', 'unknown')
+                    title = rule.get('title', 'Unknown')
+                    print(f"  - [{level}] {title}")
+                if len(rules) > 5:
+                    print(f"  ... and {len(rules) - 5} more")
+        else:
+            print("Has Rules: No")
 
         print(f"\nReferences: {cve.get('reference_count', 0)}")
         print(f"Last Enriched: {cve.get('last_enriched_at')}")

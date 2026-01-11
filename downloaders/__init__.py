@@ -7,6 +7,7 @@ from .capec import CAPECDownloader
 from .attack import ATTACKDownloader
 from .epss import EPSSDownloader
 from .kev import KEVDownloader
+from .sigma import SigmaDownloader
 
 __all__ = [
     "NVDDownloader",
@@ -16,4 +17,5 @@ __all__ = [
     "ATTACKDownloader",
     "EPSSDownloader",
     "KEVDownloader",
+    "SigmaDownloader",
 ]

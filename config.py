@@ -56,6 +56,11 @@ DATA_SOURCES = {
         "url": "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
         "cache_file": CACHE_DIR / "kev.json",
     },
+    "sigma": {
+        "url": "https://github.com/SigmaHQ/sigma/archive/refs/heads/master.zip",
+        "cache_file": CACHE_DIR / "sigma-master.zip",
+        "extracted_dir": CACHE_DIR / "sigma-master",
+    },
 }
 
 # Cache settings

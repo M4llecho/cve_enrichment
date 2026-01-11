@@ -276,6 +276,7 @@ class DatabaseManager:
                 in_kev, kev_date_added, kev_due_date, kev_ransomware_use,
                 has_exploit, exploit_count, has_patch, reference_count,
                 cpe,
+                has_detection_rules, detection_rules_count, detection_rules,
                 last_enriched_at
             ) VALUES (
                 ?, ?, ?, ?,
@@ -288,6 +289,7 @@ class DatabaseManager:
                 ?, ?, ?, ?,
                 ?, ?, ?, ?,
                 ?,
+                ?, ?, ?,
                 NOW()
             )
             ON DUPLICATE KEY UPDATE
@@ -317,6 +319,9 @@ class DatabaseManager:
                 has_patch = VALUES(has_patch),
                 reference_count = VALUES(reference_count),
                 cpe = VALUES(cpe),
+                has_detection_rules = VALUES(has_detection_rules),
+                detection_rules_count = VALUES(detection_rules_count),
+                detection_rules = VALUES(detection_rules),
                 last_enriched_at = NOW()
         """
 
@@ -329,6 +334,7 @@ class DatabaseManager:
         tactic_ids = json.dumps(cve_data.get("tactic_ids", []))
         tactic_names = json.dumps(cve_data.get("tactic_names", []))
         cpe = json.dumps(cve_data.get("cpe", []))
+        detection_rules = json.dumps(cve_data.get("detection_rules", []))
 
         with self.connection() as conn:
             cursor = conn.cursor()
@@ -361,6 +367,9 @@ class DatabaseManager:
                     cve_data.get("has_patch", False),
                     cve_data.get("reference_count", 0),
                     cpe,
+                    cve_data.get("has_detection_rules", False),
+                    cve_data.get("detection_rules_count", 0),
+                    detection_rules,
                 ))
                 conn.commit()
                 return True
@@ -388,6 +397,7 @@ class DatabaseManager:
                 in_kev, kev_date_added, kev_due_date, kev_ransomware_use,
                 has_exploit, exploit_count, has_patch, reference_count,
                 cpe,
+                has_detection_rules, detection_rules_count, detection_rules,
                 last_enriched_at
             ) VALUES (
                 ?, ?, ?, ?,
@@ -400,6 +410,7 @@ class DatabaseManager:
                 ?, ?, ?, ?,
                 ?, ?, ?, ?,
                 ?,
+                ?, ?, ?,
                 NOW()
             )
             ON DUPLICATE KEY UPDATE
@@ -429,6 +440,9 @@ class DatabaseManager:
                 has_patch = VALUES(has_patch),
                 reference_count = VALUES(reference_count),
                 cpe = VALUES(cpe),
+                has_detection_rules = VALUES(has_detection_rules),
+                detection_rules_count = VALUES(detection_rules_count),
+                detection_rules = VALUES(detection_rules),
                 last_enriched_at = NOW()
         """
 
@@ -462,6 +476,9 @@ class DatabaseManager:
                 cve.get("has_patch", False),
                 cve.get("reference_count", 0),
                 json.dumps(cve.get("cpe", [])),
+                cve.get("has_detection_rules", False),
+                cve.get("detection_rules_count", 0),
+                json.dumps(cve.get("detection_rules", [])),
             ))
 
         with self.connection() as conn:
@@ -493,7 +510,8 @@ class DatabaseManager:
 
             # Parse JSON fields
             for field in ["cwe_ids", "cwe_names", "capec_ids", "technique_ids",
-                          "technique_names", "tactic_ids", "tactic_names", "cpe"]:
+                          "technique_names", "tactic_ids", "tactic_names", "cpe",
+                          "detection_rules"]:
                 if result.get(field):
                     try:
                         result[field] = json.loads(result[field])
@@ -646,3 +664,51 @@ class DatabaseManager:
                 cursor.close()
 
         return updated
+
+    def update_sigma_rules_batch(
+        self,
+        rules_data: List[Tuple[str, bool, int, str]]
+    ) -> int:
+        """
+        Update detection rules for existing CVEs.
+
+        Args:
+            rules_data: List of (cve_id, has_detection_rules, detection_rules_count, detection_rules_json) tuples
+
+        Returns:
+            Number of updated rows
+        """
+        if not rules_data:
+            return 0
+
+        sql = """
+            UPDATE cve_enriched
+            SET has_detection_rules = ?, detection_rules_count = ?, detection_rules = ?
+            WHERE cve_id = ?
+        """
+
+        updated = 0
+        with self.connection() as conn:
+            cursor = conn.cursor()
+            try:
+                # Reorder tuple for SQL: (has_rules, count, json, cve_id)
+                values = [(r[1], r[2], r[3], r[0]) for r in rules_data]
+                cursor.executemany(sql, values)
+                conn.commit()
+                updated = cursor.rowcount
+            except mariadb.Error as e:
+                logger.error(f"Error updating Sigma rules: {e}")
+                conn.rollback()
+                raise
+            finally:
+                cursor.close()
+
+        return updated
+
+    def get_cves_with_detection_rules(self) -> List[str]:
+        """Get all CVE IDs that have detection rules."""
+        with self.cursor() as (cursor, conn):
+            cursor.execute(
+                "SELECT cve_id FROM cve_enriched WHERE has_detection_rules = TRUE"
+            )
+            return [row[0] for row in cursor.fetchall()]

@@ -6,6 +6,7 @@ A comprehensive tool to enrich CVE data with:
 - CWE -> CAPEC -> ATT&CK Technique -> Tactic mappings
 - EPSS scores (exploit probability)
 - CISA KEV status
+- SigmaHQ detection rules
 
 Usage:
     python main.py init                      Initialize database and download mappings
@@ -14,7 +15,8 @@ Usage:
     python main.py update-cve                Incremental CVE update via NVD API
     python main.py update-epss               Update EPSS scores for all CVEs
     python main.py update-kev                Update KEV status for all CVEs
-    python main.py update-all                Full update: CVE + EPSS + KEV
+    python main.py update-sigma              Update Sigma detection rules for all CVEs
+    python main.py update-all                Full update: CVE + EPSS + KEV + Sigma
     python main.py enrich-cve CVE-ID         Enrich a single CVE
     python main.py enrich-list file.txt      Enrich CVEs from a file
     python main.py show CVE-ID               Display enriched CVE data
@@ -216,18 +218,48 @@ def cmd_update_kev(args: argparse.Namespace) -> int:
         return 1
 
 
-def cmd_update_all(args: argparse.Namespace) -> int:
-    """Update CVEs, EPSS scores, and KEV status."""
+def cmd_update_sigma(args: argparse.Namespace) -> int:
+    """Update Sigma detection rules for all CVEs."""
     from enricher import CVEEnricher
+    from database.schema import add_detection_rules_columns
 
     logger = logging.getLogger(__name__)
-    logger.info("Starting full update (CVE + EPSS + KEV)...")
+    logger.info("Starting Sigma rules update...")
 
     try:
+        # Ensure detection rules columns exist
+        add_detection_rules_columns()
+
+        enricher = CVEEnricher()
+        count = enricher.update_sigma_rules(
+            batch_size=args.batch_size,
+            force_download=args.force
+        )
+
+        logger.info(f"Updated Sigma rules for {count} CVEs")
+        return 0
+
+    except Exception as e:
+        logger.error(f"Sigma update failed: {e}")
+        return 1
+
+
+def cmd_update_all(args: argparse.Namespace) -> int:
+    """Update CVEs, EPSS scores, KEV status, and Sigma rules."""
+    from enricher import CVEEnricher
+    from database.schema import add_detection_rules_columns
+
+    logger = logging.getLogger(__name__)
+    logger.info("Starting full update (CVE + EPSS + KEV + Sigma)...")
+
+    try:
+        # Ensure detection rules columns exist
+        add_detection_rules_columns()
+
         enricher = CVEEnricher()
 
         # Step 1: Update CVEs from NVD
-        logger.info("=== Step 1/3: Updating CVEs from NVD ===")
+        logger.info("=== Step 1/4: Updating CVEs from NVD ===")
         cve_count = enricher.update(
             batch_size=args.batch_size,
             force_download=args.force
@@ -235,7 +267,7 @@ def cmd_update_all(args: argparse.Namespace) -> int:
         logger.info(f"Updated {cve_count} CVEs")
 
         # Step 2: Update EPSS scores
-        logger.info("=== Step 2/3: Updating EPSS scores ===")
+        logger.info("=== Step 2/4: Updating EPSS scores ===")
         epss_count = enricher.update_epss_scores(
             batch_size=1000,
             force_download=args.force
@@ -243,14 +275,25 @@ def cmd_update_all(args: argparse.Namespace) -> int:
         logger.info(f"Updated EPSS for {epss_count} CVEs")
 
         # Step 3: Update KEV status
-        logger.info("=== Step 3/3: Updating KEV status ===")
+        logger.info("=== Step 3/4: Updating KEV status ===")
         kev_count = enricher.update_kev_status(
             batch_size=1000,
             force_download=args.force
         )
         logger.info(f"Updated KEV for {kev_count} CVEs")
 
-        logger.info(f"Full update complete. CVEs: {cve_count}, EPSS: {epss_count}, KEV: {kev_count}")
+        # Step 4: Update Sigma rules
+        logger.info("=== Step 4/4: Updating Sigma rules ===")
+        sigma_count = enricher.update_sigma_rules(
+            batch_size=1000,
+            force_download=args.force
+        )
+        logger.info(f"Updated Sigma rules for {sigma_count} CVEs")
+
+        logger.info(
+            f"Full update complete. CVEs: {cve_count}, EPSS: {epss_count}, "
+            f"KEV: {kev_count}, Sigma: {sigma_count}"
+        )
         return 0
 
     except Exception as e:
@@ -261,6 +304,7 @@ def cmd_update_all(args: argparse.Namespace) -> int:
 def cmd_enrich_cve(args: argparse.Namespace) -> int:
     """Enrich a single CVE."""
     from enricher import CVEEnricher
+    from database.schema import add_detection_rules_columns
 
     logger = logging.getLogger(__name__)
     cve_id = args.cve_id.upper()
@@ -271,11 +315,15 @@ def cmd_enrich_cve(args: argparse.Namespace) -> int:
     logger.info(f"Enriching {cve_id}...")
 
     try:
+        # Ensure detection rules columns exist
+        add_detection_rules_columns()
+
         enricher = CVEEnricher()
 
-        # Download EPSS and KEV if needed
+        # Download EPSS, KEV and Sigma if needed
         enricher.epss.download()
         enricher.kev.download()
+        enricher.sigma.download()
 
         enriched = enricher.enrich_single_cve(cve_id)
 
@@ -294,6 +342,7 @@ def cmd_enrich_cve(args: argparse.Namespace) -> int:
 def cmd_enrich_list(args: argparse.Namespace) -> int:
     """Enrich CVEs from a file."""
     from enricher import CVEEnricher
+    from database.schema import add_detection_rules_columns
 
     logger = logging.getLogger(__name__)
     file_path = Path(args.file)
@@ -303,6 +352,9 @@ def cmd_enrich_list(args: argparse.Namespace) -> int:
         return 1
 
     try:
+        # Ensure detection rules columns exist
+        add_detection_rules_columns()
+
         # Read CVE IDs from file
         with open(file_path, "r") as f:
             cve_ids = []
@@ -321,9 +373,10 @@ def cmd_enrich_list(args: argparse.Namespace) -> int:
 
         enricher = CVEEnricher()
 
-        # Download EPSS and KEV if needed
+        # Download EPSS, KEV and Sigma if needed
         enricher.epss.download(force=args.force)
         enricher.kev.download(force=args.force)
+        enricher.sigma.download(force=args.force)
 
         count = enricher.enrich_cve_list(cve_ids, batch_size=args.batch_size)
 
@@ -370,6 +423,8 @@ def cmd_stats(args: argparse.Namespace) -> int:
         print(f"  CWE->CAPEC Mappings: {stats.get('cwe_capec_mappings', 0):,}")
         print(f"  CAPEC->Technique Mappings: {stats.get('capec_technique_mappings', 0):,}")
         print(f"  Technique->Tactic Mappings: {stats.get('technique_tactic_mappings', 0):,}")
+        print(f"\nDetection Rules:")
+        print(f"  CVEs with Sigma rules: {stats.get('cves_with_detection_rules', 0):,}")
         print()
 
         return 0
@@ -474,11 +529,25 @@ def main() -> int:
     )
     update_kev_parser.set_defaults(func=cmd_update_kev)
 
-    # Update all command (CVE + EPSS + KEV)
+    # Update Sigma command
+    update_sigma_parser = subparsers.add_parser(
+        "update-sigma",
+        aliases=["--update-sigma"],
+        help="Update Sigma detection rules for all CVEs in database"
+    )
+    update_sigma_parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=1000,
+        help="Batch size for database updates (default: 1000)"
+    )
+    update_sigma_parser.set_defaults(func=cmd_update_sigma)
+
+    # Update all command (CVE + EPSS + KEV + Sigma)
     update_all_parser = subparsers.add_parser(
         "update-all",
         aliases=["--update-all"],
-        help="Full update: CVEs from NVD + EPSS scores + KEV status"
+        help="Full update: CVEs from NVD + EPSS scores + KEV status + Sigma rules"
     )
     update_all_parser.add_argument(
         "--batch-size",
@@ -573,6 +642,11 @@ def main() -> int:
             elif arg == "--update-kev":
                 args.command = "update-kev"
                 args.func = cmd_update_kev
+                args.batch_size = 1000
+                break
+            elif arg == "--update-sigma":
+                args.command = "update-sigma"
+                args.func = cmd_update_sigma
                 args.batch_size = 1000
                 break
             elif arg == "--update-all":
