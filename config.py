@@ -61,6 +61,11 @@ DATA_SOURCES = {
         "cache_file": CACHE_DIR / "sigma-master.zip",
         "extracted_dir": CACHE_DIR / "sigma-master",
     },
+    "nuclei": {
+        "url": "https://github.com/projectdiscovery/nuclei-templates/archive/refs/heads/main.zip",
+        "cache_file": CACHE_DIR / "nuclei-templates.zip",
+        "extracted_dir": CACHE_DIR / "nuclei-templates-main",
+    },
 }
 
 # Cache settings

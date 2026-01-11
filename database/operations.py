@@ -277,6 +277,7 @@ class DatabaseManager:
                 has_exploit, exploit_count, has_patch, reference_count,
                 cpe,
                 has_detection_rules, detection_rules_count, detection_rules,
+                has_nuclei_template, nuclei_template_count, nuclei_templates,
                 last_enriched_at
             ) VALUES (
                 ?, ?, ?, ?,
@@ -289,6 +290,7 @@ class DatabaseManager:
                 ?, ?, ?, ?,
                 ?, ?, ?, ?,
                 ?,
+                ?, ?, ?,
                 ?, ?, ?,
                 NOW()
             )
@@ -322,6 +324,9 @@ class DatabaseManager:
                 has_detection_rules = VALUES(has_detection_rules),
                 detection_rules_count = VALUES(detection_rules_count),
                 detection_rules = VALUES(detection_rules),
+                has_nuclei_template = VALUES(has_nuclei_template),
+                nuclei_template_count = VALUES(nuclei_template_count),
+                nuclei_templates = VALUES(nuclei_templates),
                 last_enriched_at = NOW()
         """
 
@@ -335,6 +340,7 @@ class DatabaseManager:
         tactic_names = json.dumps(cve_data.get("tactic_names", []))
         cpe = json.dumps(cve_data.get("cpe", []))
         detection_rules = json.dumps(cve_data.get("detection_rules", []))
+        nuclei_templates = json.dumps(cve_data.get("nuclei_templates", []))
 
         with self.connection() as conn:
             cursor = conn.cursor()
@@ -370,6 +376,9 @@ class DatabaseManager:
                     cve_data.get("has_detection_rules", False),
                     cve_data.get("detection_rules_count", 0),
                     detection_rules,
+                    cve_data.get("has_nuclei_template", False),
+                    cve_data.get("nuclei_template_count", 0),
+                    nuclei_templates,
                 ))
                 conn.commit()
                 return True
@@ -398,6 +407,7 @@ class DatabaseManager:
                 has_exploit, exploit_count, has_patch, reference_count,
                 cpe,
                 has_detection_rules, detection_rules_count, detection_rules,
+                has_nuclei_template, nuclei_template_count, nuclei_templates,
                 last_enriched_at
             ) VALUES (
                 ?, ?, ?, ?,
@@ -410,6 +420,7 @@ class DatabaseManager:
                 ?, ?, ?, ?,
                 ?, ?, ?, ?,
                 ?,
+                ?, ?, ?,
                 ?, ?, ?,
                 NOW()
             )
@@ -443,6 +454,9 @@ class DatabaseManager:
                 has_detection_rules = VALUES(has_detection_rules),
                 detection_rules_count = VALUES(detection_rules_count),
                 detection_rules = VALUES(detection_rules),
+                has_nuclei_template = VALUES(has_nuclei_template),
+                nuclei_template_count = VALUES(nuclei_template_count),
+                nuclei_templates = VALUES(nuclei_templates),
                 last_enriched_at = NOW()
         """
 
@@ -479,6 +493,9 @@ class DatabaseManager:
                 cve.get("has_detection_rules", False),
                 cve.get("detection_rules_count", 0),
                 json.dumps(cve.get("detection_rules", [])),
+                cve.get("has_nuclei_template", False),
+                cve.get("nuclei_template_count", 0),
+                json.dumps(cve.get("nuclei_templates", [])),
             ))
 
         with self.connection() as conn:
@@ -511,7 +528,7 @@ class DatabaseManager:
             # Parse JSON fields
             for field in ["cwe_ids", "cwe_names", "capec_ids", "technique_ids",
                           "technique_names", "tactic_ids", "tactic_names", "cpe",
-                          "detection_rules"]:
+                          "detection_rules", "nuclei_templates"]:
                 if result.get(field):
                     try:
                         result[field] = json.loads(result[field])
@@ -710,5 +727,53 @@ class DatabaseManager:
         with self.cursor() as (cursor, conn):
             cursor.execute(
                 "SELECT cve_id FROM cve_enriched WHERE has_detection_rules = TRUE"
+            )
+            return [row[0] for row in cursor.fetchall()]
+
+    def update_nuclei_templates_batch(
+        self,
+        templates_data: List[Tuple[str, bool, int, str]]
+    ) -> int:
+        """
+        Update Nuclei templates for existing CVEs.
+
+        Args:
+            templates_data: List of (cve_id, has_nuclei_template, nuclei_template_count, nuclei_templates_json) tuples
+
+        Returns:
+            Number of updated rows
+        """
+        if not templates_data:
+            return 0
+
+        sql = """
+            UPDATE cve_enriched
+            SET has_nuclei_template = ?, nuclei_template_count = ?, nuclei_templates = ?
+            WHERE cve_id = ?
+        """
+
+        updated = 0
+        with self.connection() as conn:
+            cursor = conn.cursor()
+            try:
+                # Reorder tuple for SQL: (has_template, count, json, cve_id)
+                values = [(t[1], t[2], t[3], t[0]) for t in templates_data]
+                cursor.executemany(sql, values)
+                conn.commit()
+                updated = cursor.rowcount
+            except mariadb.Error as e:
+                logger.error(f"Error updating Nuclei templates: {e}")
+                conn.rollback()
+                raise
+            finally:
+                cursor.close()
+
+        return updated
+
+    def get_cves_with_nuclei_templates(self) -> List[str]:
+        """Get all CVE IDs that have Nuclei templates."""
+        with self.cursor() as (cursor, conn):
+            cursor.execute(
+                "SELECT cve_id FROM cve_enriched WHERE has_nuclei_template = TRUE"
             )
             return [row[0] for row in cursor.fetchall()]

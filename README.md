@@ -9,6 +9,7 @@ Sistema completo per arricchire CVE con dati da fonti esterne e salvarli in Mari
 - **EPSS score**: probabilità di exploit
 - **KEV**: verifica se la CVE è nella lista CISA Known Exploited Vulnerabilities
 - **Sigma Detection Rules**: regole di detection da SigmaHQ associate alle CVE
+- **Nuclei Templates**: exploit templates da ProjectDiscovery associati alle CVE
 
 ## Requisiti
 
@@ -151,10 +152,25 @@ python main.py update-sigma --batch-size 2000
 python main.py update-sigma -f
 ```
 
-### Aggiornamento Completo (CVE + EPSS + KEV + Sigma)
+### Aggiornamento Nuclei Templates
 
 ```bash
-# Esegue in sequenza: update-cve, update-epss, update-kev, update-sigma
+# Aggiorna i template Nuclei per tutte le CVE nel database
+python main.py update-nuclei
+# oppure
+python main.py --update-nuclei
+
+# Con batch size personalizzato (default: 1000)
+python main.py update-nuclei --batch-size 2000
+
+# Forza re-download anche se in cache
+python main.py update-nuclei -f
+```
+
+### Aggiornamento Completo (CVE + EPSS + KEV + Sigma + Nuclei)
+
+```bash
+# Esegue in sequenza: update-cve, update-epss, update-kev, update-sigma, update-nuclei
 python main.py update-all
 # oppure
 python main.py --update-all
@@ -204,7 +220,8 @@ python main.py stats
 | `update-epss` | Aggiorna score EPSS per tutte le CVE |
 | `update-kev` | Aggiorna stato KEV per tutte le CVE |
 | `update-sigma` | Aggiorna regole Sigma per tutte le CVE |
-| `update-all` | Aggiornamento completo: CVE + EPSS + KEV + Sigma |
+| `update-nuclei` | Aggiorna template Nuclei per tutte le CVE |
+| `update-all` | Aggiornamento completo: CVE + EPSS + KEV + Sigma + Nuclei |
 | `enrich-cve <CVE-ID>` | Arricchisce una singola CVE |
 | `enrich-list <file>` | Arricchisce CVE da file |
 | `show <CVE-ID>` | Mostra dati di una CVE |
@@ -243,17 +260,26 @@ cve_enriched (
     has_exploit, exploit_count, has_patch, reference_count,
     cpe,
     has_detection_rules, detection_rules_count, detection_rules,
+    has_nuclei_template, nuclei_template_count, nuclei_templates,
     last_enriched_at
 )
 ```
 
-#### Campi Detection Rules
+#### Campi Detection Rules (Sigma)
 
 | Campo | Tipo | Descrizione |
 |-------|------|-------------|
 | `has_detection_rules` | BOOLEAN | True se esistono regole Sigma per questa CVE |
 | `detection_rules_count` | INT | Numero di regole Sigma associate |
 | `detection_rules` | JSON | Array di regole: `[{"id", "title", "level", "filename"}]` |
+
+#### Campi Exploit Templates (Nuclei)
+
+| Campo | Tipo | Descrizione |
+|-------|------|-------------|
+| `has_nuclei_template` | BOOLEAN | True se esistono template Nuclei per questa CVE |
+| `nuclei_template_count` | INT | Numero di template Nuclei associati |
+| `nuclei_templates` | JSON | Array di template: `[{"id", "name", "severity", "filename", "verified", "vendor", "product"}]` |
 
 ## Fonti Dati
 
@@ -266,6 +292,7 @@ cve_enriched (
 | EPSS | https://api.first.org/data/v1/epss | Exploit probability |
 | KEV | https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json | Known exploited |
 | SigmaHQ | https://github.com/SigmaHQ/sigma | Detection rules |
+| Nuclei | https://github.com/projectdiscovery/nuclei-templates | Exploit templates |
 
 ## Note
 
@@ -326,6 +353,13 @@ Has Rules: Yes (12 rules)
   - [high] Log4j RCE CVE-2021-44228 in Fields
   - [medium] Log4j Exploitation Indicators
   ... and 9 more
+
+--- Exploit Templates (Nuclei) ---
+Has Templates: Yes (5 templates)
+  - [critical] Apache Log4j2 RCE (verified)
+  - [critical] Log4j JNDI Injection (verified)
+  - [high] Log4j Scanner Detection
+  ... and 2 more
 
 References: 25
 Last Enriched: 2024-01-15 14:30:00

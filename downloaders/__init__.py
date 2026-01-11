@@ -8,6 +8,7 @@ from .attack import ATTACKDownloader
 from .epss import EPSSDownloader
 from .kev import KEVDownloader
 from .sigma import SigmaDownloader
+from .nuclei import NucleiDownloader
 
 __all__ = [
     "NVDDownloader",
@@ -18,4 +19,5 @@ __all__ = [
     "EPSSDownloader",
     "KEVDownloader",
     "SigmaDownloader",
+    "NucleiDownloader",
 ]

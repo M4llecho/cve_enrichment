@@ -19,8 +19,9 @@ from downloaders import (
     EPSSDownloader,
     KEVDownloader,
     SigmaDownloader,
+    NucleiDownloader,
 )
-from parsers import CWEParser, CAPECParser, ATTACKParser, SigmaParser
+from parsers import CWEParser, CAPECParser, ATTACKParser, SigmaParser, NucleiParser
 
 logger = logging.getLogger(__name__)
 
@@ -41,12 +42,14 @@ class CVEEnricher:
         self.epss = EPSSDownloader()
         self.kev = KEVDownloader()
         self.sigma = SigmaDownloader()
+        self.nuclei = NucleiDownloader()
 
         # Parsers (initialized after download)
         self._cwe_parser: Optional[CWEParser] = None
         self._capec_parser: Optional[CAPECParser] = None
         self._attack_parser: Optional[ATTACKParser] = None
         self._sigma_parser: Optional[SigmaParser] = None
+        self._nuclei_parser: Optional[NucleiParser] = None
 
     def download_all_sources(self, force: bool = False) -> None:
         """Download all external data sources."""
@@ -60,6 +63,7 @@ class CVEEnricher:
             ("EPSS", self.epss.download),
             ("KEV", self.kev.download),
             ("Sigma", self.sigma.download),
+            ("Nuclei", self.nuclei.download),
         ]
 
         for name, download_func in sources:
@@ -217,6 +221,17 @@ class CVEEnricher:
             enriched["detection_rules_count"] = 0
             enriched["detection_rules"] = []
 
+        # Get Nuclei templates
+        nuclei_templates = self._get_nuclei_templates(cve_id)
+        if nuclei_templates:
+            enriched["has_nuclei_template"] = True
+            enriched["nuclei_template_count"] = len(nuclei_templates)
+            enriched["nuclei_templates"] = nuclei_templates
+        else:
+            enriched["has_nuclei_template"] = False
+            enriched["nuclei_template_count"] = 0
+            enriched["nuclei_templates"] = []
+
         return enriched
 
     def _get_sigma_rules(self, cve_id: str) -> List[Dict[str, Any]]:
@@ -240,6 +255,28 @@ class CVEEnricher:
             self._sigma_parser.build_cve_index()
 
         return self._sigma_parser.get_rules_for_cve(cve_id)
+
+    def _get_nuclei_templates(self, cve_id: str) -> List[Dict[str, Any]]:
+        """
+        Get Nuclei templates for a CVE.
+        Lazily initializes the Nuclei parser and index on first call.
+
+        Args:
+            cve_id: CVE identifier
+
+        Returns:
+            List of template info dicts
+        """
+        # Lazy load Nuclei index
+        if self._nuclei_parser is None:
+            templates_dir = self.nuclei.get_templates_dir()
+            if not templates_dir:
+                logger.debug("Nuclei templates not downloaded yet")
+                return []
+            self._nuclei_parser = NucleiParser(templates_dir)
+            self._nuclei_parser.build_cve_index()
+
+        return self._nuclei_parser.get_templates_for_cve(cve_id)
 
     def enrich_single_cve(self, cve_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -683,6 +720,85 @@ class CVEEnricher:
         )
         return updated_count
 
+    def update_nuclei_templates(
+        self,
+        batch_size: int = 1000,
+        force_download: bool = False,
+    ) -> int:
+        """
+        Update Nuclei templates for all existing CVEs in database.
+
+        Downloads Nuclei templates repository, parses templates to find CVE references,
+        and updates the nuclei_templates fields for matching CVEs.
+
+        Args:
+            batch_size: Number of CVEs to update per batch
+            force_download: Force re-download of Nuclei templates
+
+        Returns:
+            Number of updated CVEs
+        """
+        import json
+
+        logger.info("Starting Nuclei templates update...")
+
+        # Download and extract Nuclei templates
+        logger.info("Downloading Nuclei templates from ProjectDiscovery...")
+        self.nuclei.download(force=force_download)
+
+        templates_dir = self.nuclei.get_templates_dir()
+        if not templates_dir:
+            logger.error("Nuclei templates directory not found")
+            return 0
+
+        # Initialize parser and build index
+        self._nuclei_parser = NucleiParser(templates_dir)
+        cve_index = self._nuclei_parser.build_cve_index()
+
+        logger.info(f"Found {len(cve_index)} CVEs with Nuclei templates")
+
+        # Get all CVE IDs from database
+        all_cve_ids = self.db.get_all_cve_ids()
+        logger.info(f"Found {len(all_cve_ids)} CVEs in database")
+
+        updated_count = 0
+        batch = []
+
+        with tqdm(total=len(all_cve_ids), desc="Updating Nuclei templates") as pbar:
+            for cve_id in all_cve_ids:
+                templates = cve_index.get(cve_id, [])
+                if templates:
+                    batch.append((
+                        cve_id,
+                        True,
+                        len(templates),
+                        json.dumps(templates)
+                    ))
+                else:
+                    # No templates - set to FALSE
+                    batch.append((cve_id, False, 0, json.dumps([])))
+
+                if len(batch) >= batch_size:
+                    self.db.update_nuclei_templates_batch(batch)
+                    updated_count += len(batch)
+                    batch = []
+
+                pbar.update(1)
+
+        # Process remaining batch
+        if batch:
+            self.db.update_nuclei_templates_batch(batch)
+            updated_count += len(batch)
+
+        # Log stats
+        stats = self._nuclei_parser.get_stats()
+        logger.info(
+            f"Nuclei update complete. Total updated: {updated_count}, "
+            f"CVEs with templates: {stats['unique_cves']}, "
+            f"Verified templates: {stats['verified_templates']}"
+        )
+        return updated_count
+
     def get_enrichment_stats(self) -> Dict[str, Any]:
         """Get statistics about the enrichment database."""
         from database.schema import get_table_count
@@ -695,6 +811,7 @@ class CVEEnricher:
             "technique_tactic_mappings": get_table_count("map_technique_tactic"),
             "kev_cves": len(self.db.get_kev_cves()),
             "cves_with_detection_rules": len(self.db.get_cves_with_detection_rules()),
+            "cves_with_nuclei_templates": len(self.db.get_cves_with_nuclei_templates()),
         }
 
         return stats
@@ -786,6 +903,22 @@ class CVEEnricher:
                     print(f"  ... and {len(rules) - 5} more")
         else:
             print("Has Rules: No")
+
+        print(f"\n--- Exploit Templates (Nuclei) ---")
+        if cve.get('has_nuclei_template'):
+            template_count = cve.get('nuclei_template_count', 0)
+            print(f"Has Templates: Yes ({template_count} template{'s' if template_count != 1 else ''})")
+            templates = cve.get('nuclei_templates', [])
+            if templates and isinstance(templates, list):
+                for tmpl in templates[:5]:  # Show max 5
+                    severity = tmpl.get('severity', 'unknown')
+                    name = tmpl.get('name', 'Unknown')
+                    verified = " (verified)" if tmpl.get('verified') else ""
+                    print(f"  - [{severity}] {name}{verified}")
+                if len(templates) > 5:
+                    print(f"  ... and {len(templates) - 5} more")
+        else:
+            print("Has Templates: No")
 
         print(f"\nReferences: {cve.get('reference_count', 0)}")
         print(f"Last Enriched: {cve.get('last_enriched_at')}")

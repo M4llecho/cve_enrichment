@@ -96,6 +96,11 @@ CREATE TABLE IF NOT EXISTS cve_enriched (
     detection_rules_count INT DEFAULT 0,
     detection_rules JSON,
 
+    -- Exploit Templates (Nuclei)
+    has_nuclei_template BOOLEAN DEFAULT FALSE,
+    nuclei_template_count INT DEFAULT 0,
+    nuclei_templates JSON,
+
     -- Metadata
     last_enriched_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 
@@ -106,6 +111,7 @@ CREATE TABLE IF NOT EXISTS cve_enriched (
     INDEX idx_in_kev (in_kev),
     INDEX idx_has_exploit (has_exploit),
     INDEX idx_has_detection_rules (has_detection_rules),
+    INDEX idx_has_nuclei_template (has_nuclei_template),
     INDEX idx_published (published_date)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 """
@@ -312,6 +318,63 @@ def add_detection_rules_columns() -> bool:
 
     except mariadb.Error as e:
         logger.error(f"Error adding detection rules columns: {e}")
+        conn.rollback()
+        return False
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def add_nuclei_template_columns() -> bool:
+    """
+    Add Nuclei template columns to existing cve_enriched table.
+
+    This migration adds the Nuclei template fields if they don't exist.
+    Safe to run multiple times.
+
+    Returns:
+        True if successful, False otherwise
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        # Check if columns already exist
+        cursor.execute(
+            "SELECT COLUMN_NAME FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'cve_enriched' "
+            "AND COLUMN_NAME = 'has_nuclei_template'",
+            (DB_CONFIG["database"],)
+        )
+
+        if cursor.fetchone():
+            logger.info("Nuclei template columns already exist")
+            return True
+
+        # Add new columns
+        logger.info("Adding Nuclei template columns to cve_enriched table...")
+
+        alter_statements = [
+            "ALTER TABLE cve_enriched ADD COLUMN has_nuclei_template BOOLEAN DEFAULT FALSE",
+            "ALTER TABLE cve_enriched ADD COLUMN nuclei_template_count INT DEFAULT 0",
+            "ALTER TABLE cve_enriched ADD COLUMN nuclei_templates JSON",
+            "ALTER TABLE cve_enriched ADD INDEX idx_has_nuclei_template (has_nuclei_template)",
+        ]
+
+        for stmt in alter_statements:
+            try:
+                cursor.execute(stmt)
+            except mariadb.Error as e:
+                # Ignore "duplicate column" or "duplicate key" errors
+                if "Duplicate" not in str(e):
+                    raise
+
+        conn.commit()
+        logger.info("Nuclei template columns added successfully")
+        return True
+
+    except mariadb.Error as e:
+        logger.error(f"Error adding Nuclei template columns: {e}")
         conn.rollback()
         return False
     finally:
