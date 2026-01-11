@@ -21,7 +21,7 @@ from downloaders import (
     SigmaDownloader,
     NucleiDownloader,
 )
-from parsers import CWEParser, CAPECParser, ATTACKParser, SigmaParser, NucleiParser
+from parsers import CWEParser, CAPECParser, ATTACKParser, SigmaParser, NucleiParser, CPEParser
 
 logger = logging.getLogger(__name__)
 
@@ -870,15 +870,30 @@ class CVEEnricher:
             print("Has Exploit: No")
         print(f"Has Patch: {'Yes' if cve.get('has_patch') else 'No'}")
 
-        print(f"\n--- CPE (Affected Products) ---")
-        cpe_list = cve.get('cpe', [])
-        if cpe_list and isinstance(cpe_list, list):
-            for cpe in cpe_list[:5]:  # Show max 5
-                print(f"  - {cpe}")
-            if len(cpe_list) > 5:
-                print(f"  ... and {len(cpe_list) - 5} more")
+        print(f"\n--- Affected Products ---")
+        vendors = cve.get('affected_vendors', [])
+        products = cve.get('affected_products', [])
+        details = cve.get('affected_products_detail', [])
+
+        if vendors:
+            print(f"Vendors: {', '.join(vendors[:5])}{' ...' if len(vendors) > 5 else ''}")
         else:
-            print("  None")
+            print("Vendors: None")
+
+        if products:
+            print(f"Products: {', '.join(products[:5])}{' ...' if len(products) > 5 else ''}")
+        else:
+            print("Products: None")
+
+        if details and isinstance(details, list):
+            print("")
+            for detail in details[:5]:  # Show max 5
+                part = CPEParser.get_part_name(detail.get('part', ''))
+                vendor = detail.get('vendor', 'unknown')
+                product = detail.get('product', 'unknown')
+                print(f"  - [{part}] {vendor} / {product}")
+            if len(details) > 5:
+                print(f"  ... and {len(details) - 5} more")
 
         print(f"\n--- KEV ---")
         if cve.get('in_kev'):

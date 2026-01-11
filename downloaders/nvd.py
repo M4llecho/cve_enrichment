@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any, Dict, Generator, List, Optional
 
 from config import NVD_API_KEY, NVD_BASE_URL, NVD_RATE_LIMIT, NVD_RATE_WINDOW
+from parsers import CPEParser
 from .base import BaseDownloader
 
 logger = logging.getLogger(__name__)
@@ -271,7 +272,7 @@ class NVDDownloader(BaseDownloader):
         # Get vulnerability status (e.g., Analyzed, Modified, Rejected, Awaiting Analysis)
         vuln_status = cve.get("vulnStatus")
 
-        # Get CPE (affected products/platforms)
+        # Get CPE (affected products/platforms) and extract vendor/product
         cpe_list = []
         configurations = cve.get("configurations", [])
         for config in configurations:
@@ -282,6 +283,9 @@ class NVDDownloader(BaseDownloader):
                     cpe_uri = cpe_match.get("criteria")
                     if cpe_uri and cpe_uri not in cpe_list:
                         cpe_list.append(cpe_uri)
+
+        # Extract affected vendors/products from CPE
+        affected = CPEParser.extract_affected_products(cpe_list)
 
         return {
             "cve_id": cve_id,
@@ -298,7 +302,9 @@ class NVDDownloader(BaseDownloader):
             "exploit_count": exploit_count,
             "has_patch": has_patch,
             "reference_count": len(references),
-            "cpe": cpe_list,
+            "affected_vendors": affected["vendors"],
+            "affected_products": affected["products"],
+            "affected_products_detail": affected["details"],
         }
 
     def get_modified_cves(

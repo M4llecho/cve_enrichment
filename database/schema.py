@@ -88,8 +88,10 @@ CREATE TABLE IF NOT EXISTS cve_enriched (
     has_patch BOOLEAN DEFAULT FALSE,
     reference_count INT DEFAULT 0,
 
-    -- CPE (affected products/platforms)
-    cpe JSON,
+    -- Affected Products (extracted from CPE)
+    affected_vendors JSON,
+    affected_products JSON,
+    affected_products_detail JSON,
 
     -- Detection Rules (Sigma)
     has_detection_rules BOOLEAN DEFAULT FALSE,
@@ -375,6 +377,83 @@ def add_nuclei_template_columns() -> bool:
 
     except mariadb.Error as e:
         logger.error(f"Error adding Nuclei template columns: {e}")
+        conn.rollback()
+        return False
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def migrate_cpe_to_affected_products() -> bool:
+    """
+    Migrate from cpe column to affected_vendors/products/detail columns.
+
+    This migration:
+    1. Adds the 3 new affected_* columns if they don't exist
+    2. Drops the old cpe column if it exists
+
+    Safe to run multiple times.
+
+    Returns:
+        True if successful, False otherwise
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        # Check if new columns already exist
+        cursor.execute(
+            "SELECT COLUMN_NAME FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'cve_enriched' "
+            "AND COLUMN_NAME = 'affected_vendors'",
+            (DB_CONFIG["database"],)
+        )
+        new_columns_exist = cursor.fetchone() is not None
+
+        # Check if old cpe column exists
+        cursor.execute(
+            "SELECT COLUMN_NAME FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'cve_enriched' "
+            "AND COLUMN_NAME = 'cpe'",
+            (DB_CONFIG["database"],)
+        )
+        old_column_exists = cursor.fetchone() is not None
+
+        if new_columns_exist and not old_column_exists:
+            logger.info("CPE migration already complete")
+            return True
+
+        # Add new columns if they don't exist
+        if not new_columns_exist:
+            logger.info("Adding affected_* columns to cve_enriched table...")
+
+            add_statements = [
+                "ALTER TABLE cve_enriched ADD COLUMN affected_vendors JSON",
+                "ALTER TABLE cve_enriched ADD COLUMN affected_products JSON",
+                "ALTER TABLE cve_enriched ADD COLUMN affected_products_detail JSON",
+            ]
+
+            for stmt in add_statements:
+                try:
+                    cursor.execute(stmt)
+                except mariadb.Error as e:
+                    if "Duplicate" not in str(e):
+                        raise
+
+            logger.info("Affected products columns added")
+
+        # Drop old cpe column if it exists
+        if old_column_exists:
+            logger.info("Dropping old cpe column...")
+            cursor.execute("ALTER TABLE cve_enriched DROP COLUMN cpe")
+            logger.info("Old cpe column dropped")
+
+        conn.commit()
+        logger.info("CPE to affected products migration completed successfully")
+        return True
+
+    except mariadb.Error as e:
+        logger.error(f"Error during CPE migration: {e}")
         conn.rollback()
         return False
     finally:

@@ -258,12 +258,20 @@ cve_enriched (
     epss_score, epss_percentile,
     in_kev, kev_date_added, kev_due_date, kev_ransomware_use,
     has_exploit, exploit_count, has_patch, reference_count,
-    cpe,
+    affected_vendors, affected_products, affected_products_detail,
     has_detection_rules, detection_rules_count, detection_rules,
     has_nuclei_template, nuclei_template_count, nuclei_templates,
     last_enriched_at
 )
 ```
+
+#### Campi Affected Products
+
+| Campo | Tipo | Descrizione |
+|-------|------|-------------|
+| `affected_vendors` | JSON | Lista vendor unici: `["apache", "microsoft"]` |
+| `affected_products` | JSON | Lista prodotti unici: `["log4j", "windows"]` |
+| `affected_products_detail` | JSON | Dettaglio vendor/product/tipo: `[{"vendor": "apache", "product": "log4j", "part": "a"}]` |
 
 #### Campi Detection Rules (Sigma)
 
@@ -336,10 +344,11 @@ Score: 0.9756 (Percentile: 0.9990)
 Has Exploit: Yes (15 references)
 Has Patch: Yes
 
---- CPE (Affected Products) ---
-  - cpe:2.3:a:apache:log4j:2.0:-:*:*:*:*:*:*
-  - cpe:2.3:a:apache:log4j:2.0:beta9:*:*:*:*:*:*
-  ... and 45 more
+--- Affected Products ---
+Vendors: apache
+Products: log4j
+
+  - [app] apache / log4j
 
 --- KEV ---
 In KEV: Yes

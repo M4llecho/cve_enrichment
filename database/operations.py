@@ -275,7 +275,7 @@ class DatabaseManager:
                 epss_score, epss_percentile,
                 in_kev, kev_date_added, kev_due_date, kev_ransomware_use,
                 has_exploit, exploit_count, has_patch, reference_count,
-                cpe,
+                affected_vendors, affected_products, affected_products_detail,
                 has_detection_rules, detection_rules_count, detection_rules,
                 has_nuclei_template, nuclei_template_count, nuclei_templates,
                 last_enriched_at
@@ -289,7 +289,7 @@ class DatabaseManager:
                 ?, ?,
                 ?, ?, ?, ?,
                 ?, ?, ?, ?,
-                ?,
+                ?, ?, ?,
                 ?, ?, ?,
                 ?, ?, ?,
                 NOW()
@@ -320,7 +320,9 @@ class DatabaseManager:
                 exploit_count = VALUES(exploit_count),
                 has_patch = VALUES(has_patch),
                 reference_count = VALUES(reference_count),
-                cpe = VALUES(cpe),
+                affected_vendors = VALUES(affected_vendors),
+                affected_products = VALUES(affected_products),
+                affected_products_detail = VALUES(affected_products_detail),
                 has_detection_rules = VALUES(has_detection_rules),
                 detection_rules_count = VALUES(detection_rules_count),
                 detection_rules = VALUES(detection_rules),
@@ -338,7 +340,9 @@ class DatabaseManager:
         technique_names = json.dumps(cve_data.get("technique_names", []))
         tactic_ids = json.dumps(cve_data.get("tactic_ids", []))
         tactic_names = json.dumps(cve_data.get("tactic_names", []))
-        cpe = json.dumps(cve_data.get("cpe", []))
+        affected_vendors = json.dumps(cve_data.get("affected_vendors", []))
+        affected_products = json.dumps(cve_data.get("affected_products", []))
+        affected_products_detail = json.dumps(cve_data.get("affected_products_detail", []))
         detection_rules = json.dumps(cve_data.get("detection_rules", []))
         nuclei_templates = json.dumps(cve_data.get("nuclei_templates", []))
 
@@ -372,7 +376,9 @@ class DatabaseManager:
                     cve_data.get("exploit_count", 0),
                     cve_data.get("has_patch", False),
                     cve_data.get("reference_count", 0),
-                    cpe,
+                    affected_vendors,
+                    affected_products,
+                    affected_products_detail,
                     cve_data.get("has_detection_rules", False),
                     cve_data.get("detection_rules_count", 0),
                     detection_rules,
@@ -405,7 +411,7 @@ class DatabaseManager:
                 epss_score, epss_percentile,
                 in_kev, kev_date_added, kev_due_date, kev_ransomware_use,
                 has_exploit, exploit_count, has_patch, reference_count,
-                cpe,
+                affected_vendors, affected_products, affected_products_detail,
                 has_detection_rules, detection_rules_count, detection_rules,
                 has_nuclei_template, nuclei_template_count, nuclei_templates,
                 last_enriched_at
@@ -419,7 +425,7 @@ class DatabaseManager:
                 ?, ?,
                 ?, ?, ?, ?,
                 ?, ?, ?, ?,
-                ?,
+                ?, ?, ?,
                 ?, ?, ?,
                 ?, ?, ?,
                 NOW()
@@ -450,7 +456,9 @@ class DatabaseManager:
                 exploit_count = VALUES(exploit_count),
                 has_patch = VALUES(has_patch),
                 reference_count = VALUES(reference_count),
-                cpe = VALUES(cpe),
+                affected_vendors = VALUES(affected_vendors),
+                affected_products = VALUES(affected_products),
+                affected_products_detail = VALUES(affected_products_detail),
                 has_detection_rules = VALUES(has_detection_rules),
                 detection_rules_count = VALUES(detection_rules_count),
                 detection_rules = VALUES(detection_rules),
@@ -489,7 +497,9 @@ class DatabaseManager:
                 cve.get("exploit_count", 0),
                 cve.get("has_patch", False),
                 cve.get("reference_count", 0),
-                json.dumps(cve.get("cpe", [])),
+                json.dumps(cve.get("affected_vendors", [])),
+                json.dumps(cve.get("affected_products", [])),
+                json.dumps(cve.get("affected_products_detail", [])),
                 cve.get("has_detection_rules", False),
                 cve.get("detection_rules_count", 0),
                 json.dumps(cve.get("detection_rules", [])),
@@ -527,7 +537,8 @@ class DatabaseManager:
 
             # Parse JSON fields
             for field in ["cwe_ids", "cwe_names", "capec_ids", "technique_ids",
-                          "technique_names", "tactic_ids", "tactic_names", "cpe",
+                          "technique_names", "tactic_ids", "tactic_names",
+                          "affected_vendors", "affected_products", "affected_products_detail",
                           "detection_rules", "nuclei_templates"]:
                 if result.get(field):
                     try:

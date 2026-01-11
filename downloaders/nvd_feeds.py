@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional
 
 from config import CACHE_DIR
+from parsers import CPEParser
 from .base import BaseDownloader
 
 logger = logging.getLogger(__name__)
@@ -131,7 +132,7 @@ def parse_cve_from_feed(cve: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     # Get vulnerability status (e.g., Analyzed, Modified, Rejected, Awaiting Analysis)
     vuln_status = cve.get("vulnStatus")
 
-    # Get CPE (affected products/platforms)
+    # Get CPE (affected products/platforms) and extract vendor/product
     cpe_list = []
     configurations = cve.get("configurations", [])
     for config in configurations:
@@ -142,6 +143,9 @@ def parse_cve_from_feed(cve: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 cpe_uri = cpe_match.get("criteria")
                 if cpe_uri and cpe_uri not in cpe_list:
                     cpe_list.append(cpe_uri)
+
+    # Extract affected vendors/products from CPE
+    affected = CPEParser.extract_affected_products(cpe_list)
 
     return {
         "cve_id": cve_id,
@@ -158,7 +162,9 @@ def parse_cve_from_feed(cve: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "exploit_count": exploit_count,
         "has_patch": has_patch,
         "reference_count": len(references),
-        "cpe": cpe_list,
+        "affected_vendors": affected["vendors"],
+        "affected_products": affected["products"],
+        "affected_products_detail": affected["details"],
     }
 
 # NVD Feeds base URL
