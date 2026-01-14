@@ -459,3 +459,60 @@ def migrate_cpe_to_affected_products() -> bool:
     finally:
         cursor.close()
         conn.close()
+
+
+def add_snort_rules_columns() -> bool:
+    """
+    Add Snort/Suricata IDS rules columns to existing cve_enriched table.
+
+    This migration adds the Snort rules fields if they don't exist.
+    Safe to run multiple times.
+
+    Returns:
+        True if successful, False otherwise
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        # Check if columns already exist
+        cursor.execute(
+            "SELECT COLUMN_NAME FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'cve_enriched' "
+            "AND COLUMN_NAME = 'has_snort_rules'",
+            (DB_CONFIG["database"],)
+        )
+
+        if cursor.fetchone():
+            logger.info("Snort rules columns already exist")
+            return True
+
+        # Add new columns
+        logger.info("Adding Snort rules columns to cve_enriched table...")
+
+        alter_statements = [
+            "ALTER TABLE cve_enriched ADD COLUMN has_snort_rules BOOLEAN DEFAULT FALSE",
+            "ALTER TABLE cve_enriched ADD COLUMN snort_rules_count INT DEFAULT 0",
+            "ALTER TABLE cve_enriched ADD COLUMN snort_rules JSON",
+            "ALTER TABLE cve_enriched ADD INDEX idx_has_snort_rules (has_snort_rules)",
+        ]
+
+        for stmt in alter_statements:
+            try:
+                cursor.execute(stmt)
+            except mariadb.Error as e:
+                # Ignore "duplicate column" or "duplicate key" errors
+                if "Duplicate" not in str(e):
+                    raise
+
+        conn.commit()
+        logger.info("Snort rules columns added successfully")
+        return True
+
+    except mariadb.Error as e:
+        logger.error(f"Error adding Snort rules columns: {e}")
+        conn.rollback()
+        return False
+    finally:
+        cursor.close()
+        conn.close()

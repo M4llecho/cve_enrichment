@@ -278,6 +278,7 @@ class DatabaseManager:
                 affected_vendors, affected_products, affected_products_detail,
                 has_detection_rules, detection_rules_count, detection_rules,
                 has_nuclei_template, nuclei_template_count, nuclei_templates,
+                has_snort_rules, snort_rules_count, snort_rules,
                 last_enriched_at
             ) VALUES (
                 ?, ?, ?, ?,
@@ -289,6 +290,7 @@ class DatabaseManager:
                 ?, ?,
                 ?, ?, ?, ?,
                 ?, ?, ?, ?,
+                ?, ?, ?,
                 ?, ?, ?,
                 ?, ?, ?,
                 ?, ?, ?,
@@ -329,6 +331,9 @@ class DatabaseManager:
                 has_nuclei_template = VALUES(has_nuclei_template),
                 nuclei_template_count = VALUES(nuclei_template_count),
                 nuclei_templates = VALUES(nuclei_templates),
+                has_snort_rules = VALUES(has_snort_rules),
+                snort_rules_count = VALUES(snort_rules_count),
+                snort_rules = VALUES(snort_rules),
                 last_enriched_at = NOW()
         """
 
@@ -345,6 +350,7 @@ class DatabaseManager:
         affected_products_detail = json.dumps(cve_data.get("affected_products_detail", []))
         detection_rules = json.dumps(cve_data.get("detection_rules", []))
         nuclei_templates = json.dumps(cve_data.get("nuclei_templates", []))
+        snort_rules = json.dumps(cve_data.get("snort_rules", []))
 
         with self.connection() as conn:
             cursor = conn.cursor()
@@ -385,6 +391,9 @@ class DatabaseManager:
                     cve_data.get("has_nuclei_template", False),
                     cve_data.get("nuclei_template_count", 0),
                     nuclei_templates,
+                    cve_data.get("has_snort_rules", False),
+                    cve_data.get("snort_rules_count", 0),
+                    snort_rules,
                 ))
                 conn.commit()
                 return True
@@ -414,6 +423,7 @@ class DatabaseManager:
                 affected_vendors, affected_products, affected_products_detail,
                 has_detection_rules, detection_rules_count, detection_rules,
                 has_nuclei_template, nuclei_template_count, nuclei_templates,
+                has_snort_rules, snort_rules_count, snort_rules,
                 last_enriched_at
             ) VALUES (
                 ?, ?, ?, ?,
@@ -425,6 +435,7 @@ class DatabaseManager:
                 ?, ?,
                 ?, ?, ?, ?,
                 ?, ?, ?, ?,
+                ?, ?, ?,
                 ?, ?, ?,
                 ?, ?, ?,
                 ?, ?, ?,
@@ -465,6 +476,9 @@ class DatabaseManager:
                 has_nuclei_template = VALUES(has_nuclei_template),
                 nuclei_template_count = VALUES(nuclei_template_count),
                 nuclei_templates = VALUES(nuclei_templates),
+                has_snort_rules = VALUES(has_snort_rules),
+                snort_rules_count = VALUES(snort_rules_count),
+                snort_rules = VALUES(snort_rules),
                 last_enriched_at = NOW()
         """
 
@@ -506,6 +520,9 @@ class DatabaseManager:
                 cve.get("has_nuclei_template", False),
                 cve.get("nuclei_template_count", 0),
                 json.dumps(cve.get("nuclei_templates", [])),
+                cve.get("has_snort_rules", False),
+                cve.get("snort_rules_count", 0),
+                json.dumps(cve.get("snort_rules", [])),
             ))
 
         with self.connection() as conn:
@@ -539,7 +556,7 @@ class DatabaseManager:
             for field in ["cwe_ids", "cwe_names", "capec_ids", "technique_ids",
                           "technique_names", "tactic_ids", "tactic_names",
                           "affected_vendors", "affected_products", "affected_products_detail",
-                          "detection_rules", "nuclei_templates"]:
+                          "detection_rules", "nuclei_templates", "snort_rules"]:
                 if result.get(field):
                     try:
                         result[field] = json.loads(result[field])
@@ -786,5 +803,53 @@ class DatabaseManager:
         with self.cursor() as (cursor, conn):
             cursor.execute(
                 "SELECT cve_id FROM cve_enriched WHERE has_nuclei_template = TRUE"
+            )
+            return [row[0] for row in cursor.fetchall()]
+
+    def update_snort_rules_batch(
+        self,
+        rules_data: List[Tuple[str, bool, int, str]]
+    ) -> int:
+        """
+        Update Snort/Suricata IDS rules for existing CVEs.
+
+        Args:
+            rules_data: List of (cve_id, has_snort_rules, snort_rules_count, snort_rules_json) tuples
+
+        Returns:
+            Number of updated rows
+        """
+        if not rules_data:
+            return 0
+
+        sql = """
+            UPDATE cve_enriched
+            SET has_snort_rules = ?, snort_rules_count = ?, snort_rules = ?
+            WHERE cve_id = ?
+        """
+
+        updated = 0
+        with self.connection() as conn:
+            cursor = conn.cursor()
+            try:
+                # Reorder tuple for SQL: (has_rules, count, json, cve_id)
+                values = [(r[1], r[2], r[3], r[0]) for r in rules_data]
+                cursor.executemany(sql, values)
+                conn.commit()
+                updated = cursor.rowcount
+            except mariadb.Error as e:
+                logger.error(f"Error updating Snort rules: {e}")
+                conn.rollback()
+                raise
+            finally:
+                cursor.close()
+
+        return updated
+
+    def get_cves_with_snort_rules(self) -> List[str]:
+        """Get all CVE IDs that have Snort/Suricata IDS rules."""
+        with self.cursor() as (cursor, conn):
+            cursor.execute(
+                "SELECT cve_id FROM cve_enriched WHERE has_snort_rules = TRUE"
             )
             return [row[0] for row in cursor.fetchall()]

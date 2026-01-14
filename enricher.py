@@ -20,8 +20,9 @@ from downloaders import (
     KEVDownloader,
     SigmaDownloader,
     NucleiDownloader,
+    SnortDownloader,
 )
-from parsers import CWEParser, CAPECParser, ATTACKParser, SigmaParser, NucleiParser, CPEParser
+from parsers import CWEParser, CAPECParser, ATTACKParser, SigmaParser, NucleiParser, CPEParser, SnortParser
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,7 @@ class CVEEnricher:
         self.kev = KEVDownloader()
         self.sigma = SigmaDownloader()
         self.nuclei = NucleiDownloader()
+        self.snort = SnortDownloader()
 
         # Parsers (initialized after download)
         self._cwe_parser: Optional[CWEParser] = None
@@ -50,6 +52,7 @@ class CVEEnricher:
         self._attack_parser: Optional[ATTACKParser] = None
         self._sigma_parser: Optional[SigmaParser] = None
         self._nuclei_parser: Optional[NucleiParser] = None
+        self._snort_parser: Optional[SnortParser] = None
 
     def download_all_sources(self, force: bool = False) -> None:
         """Download all external data sources."""
@@ -64,6 +67,7 @@ class CVEEnricher:
             ("KEV", self.kev.download),
             ("Sigma", self.sigma.download),
             ("Nuclei", self.nuclei.download),
+            ("Snort", self.snort.download),
         ]
 
         for name, download_func in sources:
@@ -232,6 +236,17 @@ class CVEEnricher:
             enriched["nuclei_template_count"] = 0
             enriched["nuclei_templates"] = []
 
+        # Get Snort/Suricata IDS rules
+        snort_rules = self._get_snort_rules(cve_id)
+        if snort_rules:
+            enriched["has_snort_rules"] = True
+            enriched["snort_rules_count"] = len(snort_rules)
+            enriched["snort_rules"] = snort_rules
+        else:
+            enriched["has_snort_rules"] = False
+            enriched["snort_rules_count"] = 0
+            enriched["snort_rules"] = []
+
         return enriched
 
     def _get_sigma_rules(self, cve_id: str) -> List[Dict[str, Any]]:
@@ -277,6 +292,28 @@ class CVEEnricher:
             self._nuclei_parser.build_cve_index()
 
         return self._nuclei_parser.get_templates_for_cve(cve_id)
+
+    def _get_snort_rules(self, cve_id: str) -> List[Dict[str, Any]]:
+        """
+        Get Snort/Suricata IDS rules for a CVE.
+        Lazily initializes the Snort parser and index on first call.
+
+        Args:
+            cve_id: CVE identifier
+
+        Returns:
+            List of rule info dicts
+        """
+        # Lazy load Snort index
+        if self._snort_parser is None:
+            rules_dir = self.snort.get_rules_dir()
+            if not rules_dir:
+                logger.debug("Snort rules not downloaded yet")
+                return []
+            self._snort_parser = SnortParser(rules_dir)
+            self._snort_parser.build_cve_index()
+
+        return self._snort_parser.get_rules_for_cve(cve_id)
 
     def enrich_single_cve(self, cve_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -799,6 +836,84 @@ class CVEEnricher:
         )
         return updated_count
 
+    def update_snort_rules(
+        self,
+        batch_size: int = 1000,
+        force_download: bool = False,
+    ) -> int:
+        """
+        Update Snort/Suricata IDS rules for all existing CVEs in database.
+
+        Downloads ET Open rules, parses rules to find CVE references,
+        and updates the snort_rules fields for matching CVEs.
+
+        Args:
+            batch_size: Number of CVEs to update per batch
+            force_download: Force re-download of Snort rules
+
+        Returns:
+            Number of updated CVEs
+        """
+        import json
+
+        logger.info("Starting Snort/ET Open rules update...")
+
+        # Download and extract Snort rules
+        logger.info("Downloading ET Open rules...")
+        self.snort.download(force=force_download)
+
+        rules_dir = self.snort.get_rules_dir()
+        if not rules_dir:
+            logger.error("Snort rules directory not found")
+            return 0
+
+        # Initialize parser and build index
+        self._snort_parser = SnortParser(rules_dir)
+        cve_index = self._snort_parser.build_cve_index()
+
+        logger.info(f"Found {len(cve_index)} CVEs with Snort rules")
+
+        # Get all CVE IDs from database
+        all_cve_ids = self.db.get_all_cve_ids()
+        logger.info(f"Found {len(all_cve_ids)} CVEs in database")
+
+        updated_count = 0
+        batch = []
+
+        with tqdm(total=len(all_cve_ids), desc="Updating Snort rules") as pbar:
+            for cve_id in all_cve_ids:
+                rules = cve_index.get(cve_id, [])
+                if rules:
+                    batch.append((
+                        cve_id,
+                        True,
+                        len(rules),
+                        json.dumps(rules)
+                    ))
+                else:
+                    # No rules - set to FALSE
+                    batch.append((cve_id, False, 0, json.dumps([])))
+
+                if len(batch) >= batch_size:
+                    self.db.update_snort_rules_batch(batch)
+                    updated_count += len(batch)
+                    batch = []
+
+                pbar.update(1)
+
+        # Process remaining batch
+        if batch:
+            self.db.update_snort_rules_batch(batch)
+            updated_count += len(batch)
+
+        # Log stats
+        stats = self._snort_parser.get_stats()
+        logger.info(
+            f"Snort update complete. Total updated: {updated_count}, "
+            f"CVEs with rules: {stats['unique_cves']}"
+        )
+        return updated_count
+
     def get_enrichment_stats(self) -> Dict[str, Any]:
         """Get statistics about the enrichment database."""
         from database.schema import get_table_count
@@ -812,6 +927,7 @@ class CVEEnricher:
             "kev_cves": len(self.db.get_kev_cves()),
             "cves_with_detection_rules": len(self.db.get_cves_with_detection_rules()),
             "cves_with_nuclei_templates": len(self.db.get_cves_with_nuclei_templates()),
+            "cves_with_snort_rules": len(self.db.get_cves_with_snort_rules()),
         }
 
         return stats
@@ -934,6 +1050,22 @@ class CVEEnricher:
                     print(f"  ... and {len(templates) - 5} more")
         else:
             print("Has Templates: No")
+
+        print(f"\n--- IDS/IPS Rules (Snort/Suricata) ---")
+        if cve.get('has_snort_rules'):
+            rules_count = cve.get('snort_rules_count', 0)
+            print(f"Has Rules: Yes ({rules_count} rule{'s' if rules_count != 1 else ''})")
+            rules = cve.get('snort_rules', [])
+            if rules and isinstance(rules, list):
+                for rule in rules[:5]:  # Show max 5
+                    severity = rule.get('severity', 'unknown')
+                    msg = rule.get('msg', 'Unknown')
+                    sid = rule.get('sid', 'N/A')
+                    print(f"  - [{severity}] SID:{sid} {msg}")
+                if len(rules) > 5:
+                    print(f"  ... and {len(rules) - 5} more")
+        else:
+            print("Has Rules: No")
 
         print(f"\nReferences: {cve.get('reference_count', 0)}")
         print(f"Last Enriched: {cve.get('last_enriched_at')}")

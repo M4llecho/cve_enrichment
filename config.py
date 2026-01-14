@@ -66,6 +66,11 @@ DATA_SOURCES = {
         "cache_file": CACHE_DIR / "nuclei-templates.zip",
         "extracted_dir": CACHE_DIR / "nuclei-templates-main",
     },
+    "snort": {
+        "url": "https://rules.emergingthreats.net/open/suricata-7.0.3/emerging.rules.tar.gz",
+        "cache_file": CACHE_DIR / "emerging-rules.tar.gz",
+        "extracted_dir": CACHE_DIR / "emerging-rules",
+    },
 }
 
 # Cache settings

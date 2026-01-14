@@ -10,6 +10,7 @@ Sistema completo per arricchire CVE con dati da fonti esterne e salvarli in Mari
 - **KEV**: verifica se la CVE è nella lista CISA Known Exploited Vulnerabilities
 - **Sigma Detection Rules**: regole di detection da SigmaHQ associate alle CVE
 - **Nuclei Templates**: exploit templates da ProjectDiscovery associati alle CVE
+- **Snort/Suricata IDS Rules**: regole IDS/IPS da Emerging Threats Open associate alle CVE
 
 ## Requisiti
 
@@ -167,10 +168,25 @@ python main.py update-nuclei --batch-size 2000
 python main.py update-nuclei -f
 ```
 
-### Aggiornamento Completo (CVE + EPSS + KEV + Sigma + Nuclei)
+### Aggiornamento Snort/Suricata IDS Rules
 
 ```bash
-# Esegue in sequenza: update-cve, update-epss, update-kev, update-sigma, update-nuclei
+# Aggiorna le regole Snort/Suricata per tutte le CVE nel database
+python main.py update-snort
+# oppure
+python main.py --update-snort
+
+# Con batch size personalizzato (default: 1000)
+python main.py update-snort --batch-size 2000
+
+# Forza re-download anche se in cache
+python main.py update-snort -f
+```
+
+### Aggiornamento Completo (CVE + EPSS + KEV + Sigma + Nuclei + Snort)
+
+```bash
+# Esegue in sequenza: update-cve, update-epss, update-kev, update-sigma, update-nuclei, update-snort
 python main.py update-all
 # oppure
 python main.py --update-all
@@ -221,7 +237,8 @@ python main.py stats
 | `update-kev` | Aggiorna stato KEV per tutte le CVE |
 | `update-sigma` | Aggiorna regole Sigma per tutte le CVE |
 | `update-nuclei` | Aggiorna template Nuclei per tutte le CVE |
-| `update-all` | Aggiornamento completo: CVE + EPSS + KEV + Sigma + Nuclei |
+| `update-snort` | Aggiorna regole Snort/Suricata per tutte le CVE |
+| `update-all` | Aggiornamento completo: CVE + EPSS + KEV + Sigma + Nuclei + Snort |
 | `enrich-cve <CVE-ID>` | Arricchisce una singola CVE |
 | `enrich-list <file>` | Arricchisce CVE da file |
 | `show <CVE-ID>` | Mostra dati di una CVE |
@@ -261,6 +278,7 @@ cve_enriched (
     affected_vendors, affected_products, affected_products_detail,
     has_detection_rules, detection_rules_count, detection_rules,
     has_nuclei_template, nuclei_template_count, nuclei_templates,
+    has_snort_rules, snort_rules_count, snort_rules,
     last_enriched_at
 )
 ```
@@ -289,6 +307,14 @@ cve_enriched (
 | `nuclei_template_count` | INT | Numero di template Nuclei associati |
 | `nuclei_templates` | JSON | Array di template: `[{"id", "name", "severity", "filename", "verified", "vendor", "product"}]` |
 
+#### Campi IDS/IPS Rules (Snort/Suricata)
+
+| Campo | Tipo | Descrizione |
+|-------|------|-------------|
+| `has_snort_rules` | BOOLEAN | True se esistono regole Snort/Suricata per questa CVE |
+| `snort_rules_count` | INT | Numero di regole IDS associate |
+| `snort_rules` | JSON | Array di regole: `[{"sid", "msg", "classtype", "severity", "filename"}]` |
+
 ## Fonti Dati
 
 | Fonte | URL | Contenuto |
@@ -301,6 +327,7 @@ cve_enriched (
 | KEV | https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json | Known exploited |
 | SigmaHQ | https://github.com/SigmaHQ/sigma | Detection rules |
 | Nuclei | https://github.com/projectdiscovery/nuclei-templates | Exploit templates |
+| ET Open | https://rules.emergingthreats.net/open/ | IDS/IPS rules (Snort/Suricata) |
 
 ## Note
 
@@ -369,6 +396,12 @@ Has Templates: Yes (5 templates)
   - [critical] Log4j JNDI Injection (verified)
   - [high] Log4j Scanner Detection
   ... and 2 more
+
+--- IDS/IPS Rules (Snort/Suricata) ---
+Has Rules: Yes (3 rules)
+  - [high] SID:2033647 ET EXPLOIT Apache Log4j RCE Attempt
+  - [high] SID:2033648 ET EXPLOIT Log4j JNDI Injection
+  - [medium] SID:2033649 ET SCAN Log4j Scanner Detection
 
 References: 25
 Last Enriched: 2024-01-15 14:30:00

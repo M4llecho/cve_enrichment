@@ -8,6 +8,7 @@ A comprehensive tool to enrich CVE data with:
 - CISA KEV status
 - SigmaHQ detection rules
 - Nuclei exploit templates
+- Snort/Suricata IDS rules (Emerging Threats Open)
 
 Usage:
     python main.py init                      Initialize database and download mappings
@@ -18,7 +19,8 @@ Usage:
     python main.py update-kev                Update KEV status for all CVEs
     python main.py update-sigma              Update Sigma detection rules for all CVEs
     python main.py update-nuclei             Update Nuclei exploit templates for all CVEs
-    python main.py update-all                Full update: CVE + EPSS + KEV + Sigma + Nuclei
+    python main.py update-snort              Update Snort/Suricata IDS rules for all CVEs
+    python main.py update-all                Full update: CVE + EPSS + KEV + Sigma + Nuclei + Snort
     python main.py enrich-cve CVE-ID         Enrich a single CVE
     python main.py enrich-list file.txt      Enrich CVEs from a file
     python main.py show CVE-ID               Display enriched CVE data
@@ -272,23 +274,50 @@ def cmd_update_nuclei(args: argparse.Namespace) -> int:
         return 1
 
 
-def cmd_update_all(args: argparse.Namespace) -> int:
-    """Update CVEs, EPSS scores, KEV status, Sigma rules, and Nuclei templates."""
+def cmd_update_snort(args: argparse.Namespace) -> int:
+    """Update Snort/Suricata IDS rules for all CVEs."""
     from enricher import CVEEnricher
-    from database.schema import add_detection_rules_columns, add_nuclei_template_columns
+    from database.schema import add_snort_rules_columns
 
     logger = logging.getLogger(__name__)
-    logger.info("Starting full update (CVE + EPSS + KEV + Sigma + Nuclei)...")
+    logger.info("Starting Snort/Suricata IDS rules update...")
+
+    try:
+        # Ensure snort rules columns exist
+        add_snort_rules_columns()
+
+        enricher = CVEEnricher()
+        count = enricher.update_snort_rules(
+            batch_size=args.batch_size,
+            force_download=args.force
+        )
+
+        logger.info(f"Updated Snort rules for {count} CVEs")
+        return 0
+
+    except Exception as e:
+        logger.error(f"Snort update failed: {e}")
+        return 1
+
+
+def cmd_update_all(args: argparse.Namespace) -> int:
+    """Update CVEs, EPSS scores, KEV status, Sigma rules, Nuclei templates, and Snort rules."""
+    from enricher import CVEEnricher
+    from database.schema import add_detection_rules_columns, add_nuclei_template_columns, add_snort_rules_columns
+
+    logger = logging.getLogger(__name__)
+    logger.info("Starting full update (CVE + EPSS + KEV + Sigma + Nuclei + Snort)...")
 
     try:
         # Ensure all columns exist
         add_detection_rules_columns()
         add_nuclei_template_columns()
+        add_snort_rules_columns()
 
         enricher = CVEEnricher()
 
         # Step 1: Update CVEs from NVD
-        logger.info("=== Step 1/5: Updating CVEs from NVD ===")
+        logger.info("=== Step 1/6: Updating CVEs from NVD ===")
         cve_count = enricher.update(
             batch_size=args.batch_size,
             force_download=args.force
@@ -296,7 +325,7 @@ def cmd_update_all(args: argparse.Namespace) -> int:
         logger.info(f"Updated {cve_count} CVEs")
 
         # Step 2: Update EPSS scores
-        logger.info("=== Step 2/5: Updating EPSS scores ===")
+        logger.info("=== Step 2/6: Updating EPSS scores ===")
         epss_count = enricher.update_epss_scores(
             batch_size=1000,
             force_download=args.force
@@ -304,7 +333,7 @@ def cmd_update_all(args: argparse.Namespace) -> int:
         logger.info(f"Updated EPSS for {epss_count} CVEs")
 
         # Step 3: Update KEV status
-        logger.info("=== Step 3/5: Updating KEV status ===")
+        logger.info("=== Step 3/6: Updating KEV status ===")
         kev_count = enricher.update_kev_status(
             batch_size=1000,
             force_download=args.force
@@ -312,7 +341,7 @@ def cmd_update_all(args: argparse.Namespace) -> int:
         logger.info(f"Updated KEV for {kev_count} CVEs")
 
         # Step 4: Update Sigma rules
-        logger.info("=== Step 4/5: Updating Sigma rules ===")
+        logger.info("=== Step 4/6: Updating Sigma rules ===")
         sigma_count = enricher.update_sigma_rules(
             batch_size=1000,
             force_download=args.force
@@ -320,16 +349,24 @@ def cmd_update_all(args: argparse.Namespace) -> int:
         logger.info(f"Updated Sigma rules for {sigma_count} CVEs")
 
         # Step 5: Update Nuclei templates
-        logger.info("=== Step 5/5: Updating Nuclei templates ===")
+        logger.info("=== Step 5/6: Updating Nuclei templates ===")
         nuclei_count = enricher.update_nuclei_templates(
             batch_size=1000,
             force_download=args.force
         )
         logger.info(f"Updated Nuclei templates for {nuclei_count} CVEs")
 
+        # Step 6: Update Snort/Suricata IDS rules
+        logger.info("=== Step 6/6: Updating Snort/ET rules ===")
+        snort_count = enricher.update_snort_rules(
+            batch_size=1000,
+            force_download=args.force
+        )
+        logger.info(f"Updated Snort rules for {snort_count} CVEs")
+
         logger.info(
             f"Full update complete. CVEs: {cve_count}, EPSS: {epss_count}, "
-            f"KEV: {kev_count}, Sigma: {sigma_count}, Nuclei: {nuclei_count}"
+            f"KEV: {kev_count}, Sigma: {sigma_count}, Nuclei: {nuclei_count}, Snort: {snort_count}"
         )
         return 0
 
@@ -341,7 +378,7 @@ def cmd_update_all(args: argparse.Namespace) -> int:
 def cmd_enrich_cve(args: argparse.Namespace) -> int:
     """Enrich a single CVE."""
     from enricher import CVEEnricher
-    from database.schema import add_detection_rules_columns, add_nuclei_template_columns
+    from database.schema import add_detection_rules_columns, add_nuclei_template_columns, add_snort_rules_columns
 
     logger = logging.getLogger(__name__)
     cve_id = args.cve_id.upper()
@@ -355,14 +392,16 @@ def cmd_enrich_cve(args: argparse.Namespace) -> int:
         # Ensure all columns exist
         add_detection_rules_columns()
         add_nuclei_template_columns()
+        add_snort_rules_columns()
 
         enricher = CVEEnricher()
 
-        # Download EPSS, KEV, Sigma and Nuclei if needed
+        # Download EPSS, KEV, Sigma, Nuclei and Snort if needed
         enricher.epss.download()
         enricher.kev.download()
         enricher.sigma.download()
         enricher.nuclei.download()
+        enricher.snort.download()
 
         enriched = enricher.enrich_single_cve(cve_id)
 
@@ -381,7 +420,7 @@ def cmd_enrich_cve(args: argparse.Namespace) -> int:
 def cmd_enrich_list(args: argparse.Namespace) -> int:
     """Enrich CVEs from a file."""
     from enricher import CVEEnricher
-    from database.schema import add_detection_rules_columns, add_nuclei_template_columns
+    from database.schema import add_detection_rules_columns, add_nuclei_template_columns, add_snort_rules_columns
 
     logger = logging.getLogger(__name__)
     file_path = Path(args.file)
@@ -394,6 +433,7 @@ def cmd_enrich_list(args: argparse.Namespace) -> int:
         # Ensure all columns exist
         add_detection_rules_columns()
         add_nuclei_template_columns()
+        add_snort_rules_columns()
 
         # Read CVE IDs from file
         with open(file_path, "r") as f:
@@ -413,11 +453,12 @@ def cmd_enrich_list(args: argparse.Namespace) -> int:
 
         enricher = CVEEnricher()
 
-        # Download EPSS, KEV, Sigma and Nuclei if needed
+        # Download EPSS, KEV, Sigma, Nuclei and Snort if needed
         enricher.epss.download(force=args.force)
         enricher.kev.download(force=args.force)
         enricher.sigma.download(force=args.force)
         enricher.nuclei.download(force=args.force)
+        enricher.snort.download(force=args.force)
 
         count = enricher.enrich_cve_list(cve_ids, batch_size=args.batch_size)
 
@@ -467,6 +508,7 @@ def cmd_stats(args: argparse.Namespace) -> int:
         print(f"\nDetection & Exploit Templates:")
         print(f"  CVEs with Sigma rules: {stats.get('cves_with_detection_rules', 0):,}")
         print(f"  CVEs with Nuclei templates: {stats.get('cves_with_nuclei_templates', 0):,}")
+        print(f"  CVEs with Snort/ET rules: {stats.get('cves_with_snort_rules', 0):,}")
         print()
 
         return 0
@@ -599,11 +641,25 @@ def main() -> int:
     )
     update_nuclei_parser.set_defaults(func=cmd_update_nuclei)
 
-    # Update all command (CVE + EPSS + KEV + Sigma + Nuclei)
+    # Update Snort command
+    update_snort_parser = subparsers.add_parser(
+        "update-snort",
+        aliases=["--update-snort"],
+        help="Update Snort/Suricata IDS rules for all CVEs in database"
+    )
+    update_snort_parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=1000,
+        help="Batch size for database updates (default: 1000)"
+    )
+    update_snort_parser.set_defaults(func=cmd_update_snort)
+
+    # Update all command (CVE + EPSS + KEV + Sigma + Nuclei + Snort)
     update_all_parser = subparsers.add_parser(
         "update-all",
         aliases=["--update-all"],
-        help="Full update: CVEs from NVD + EPSS scores + KEV status + Sigma rules + Nuclei templates"
+        help="Full update: CVEs from NVD + EPSS scores + KEV status + Sigma rules + Nuclei templates + Snort rules"
     )
     update_all_parser.add_argument(
         "--batch-size",
@@ -708,6 +764,11 @@ def main() -> int:
             elif arg == "--update-nuclei":
                 args.command = "update-nuclei"
                 args.func = cmd_update_nuclei
+                args.batch_size = 1000
+                break
+            elif arg == "--update-snort":
+                args.command = "update-snort"
+                args.func = cmd_update_snort
                 args.batch_size = 1000
                 break
             elif arg == "--update-all":
