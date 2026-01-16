@@ -516,3 +516,77 @@ def add_snort_rules_columns() -> bool:
     finally:
         cursor.close()
         conn.close()
+
+
+def add_llm_tagging_columns() -> bool:
+    """
+    Add LLM tagging columns to existing cve_enriched table.
+
+    This migration adds columns for LLM-generated security tags used for
+    kill chain reconstruction. Safe to run multiple times.
+
+    Columns added:
+    - llm_tags_version: Version of the taxonomy used
+    - llm_model_used: Which LLM model generated the tags
+    - llm_tagged_at: When the tags were generated
+    - kill_chain_phases: JSON array of kill chain phase tags
+    - prerequisites: JSON array of prerequisite tags (input for chaining)
+    - capabilities: JSON array of capability tags (output for chaining)
+    - llm_confidence_score: Confidence score from the model
+
+    Returns:
+        True if successful, False otherwise
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        # Check if columns already exist
+        cursor.execute(
+            "SELECT COLUMN_NAME FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'cve_enriched' "
+            "AND COLUMN_NAME = 'llm_tagged_at'",
+            (DB_CONFIG["database"],)
+        )
+
+        if cursor.fetchone():
+            logger.info("LLM tagging columns already exist")
+            return True
+
+        # Add new columns
+        logger.info("Adding LLM tagging columns to cve_enriched table...")
+
+        alter_statements = [
+            # Metadata
+            "ALTER TABLE cve_enriched ADD COLUMN llm_tags_version VARCHAR(20)",
+            "ALTER TABLE cve_enriched ADD COLUMN llm_model_used VARCHAR(100)",
+            "ALTER TABLE cve_enriched ADD COLUMN llm_tagged_at DATETIME",
+            # Tag categories (JSON arrays)
+            "ALTER TABLE cve_enriched ADD COLUMN kill_chain_phases JSON",
+            "ALTER TABLE cve_enriched ADD COLUMN prerequisites JSON",
+            "ALTER TABLE cve_enriched ADD COLUMN capabilities JSON",
+            # Quality metrics
+            "ALTER TABLE cve_enriched ADD COLUMN llm_confidence_score DECIMAL(3,2)",
+            # Index for finding untagged CVEs
+            "ALTER TABLE cve_enriched ADD INDEX idx_llm_tagged_at (llm_tagged_at)",
+        ]
+
+        for stmt in alter_statements:
+            try:
+                cursor.execute(stmt)
+            except mariadb.Error as e:
+                # Ignore "duplicate column" or "duplicate key" errors
+                if "Duplicate" not in str(e):
+                    raise
+
+        conn.commit()
+        logger.info("LLM tagging columns added successfully")
+        return True
+
+    except mariadb.Error as e:
+        logger.error(f"Error adding LLM tagging columns: {e}")
+        conn.rollback()
+        return False
+    finally:
+        cursor.close()
+        conn.close()

@@ -4,3 +4,8 @@ __pycache__/
 .env
 cache/
 *.log
+*.db
+
+# LLM module
+llm/prompts_bk.py
+llm/*:Zone.Identifier

@@ -556,7 +556,8 @@ class DatabaseManager:
             for field in ["cwe_ids", "cwe_names", "capec_ids", "technique_ids",
                           "technique_names", "tactic_ids", "tactic_names",
                           "affected_vendors", "affected_products", "affected_products_detail",
-                          "detection_rules", "nuclei_templates", "snort_rules"]:
+                          "detection_rules", "nuclei_templates", "snort_rules",
+                          "kill_chain_phases", "prerequisites", "capabilities"]:
                 if result.get(field):
                     try:
                         result[field] = json.loads(result[field])
@@ -851,5 +852,178 @@ class DatabaseManager:
         with self.cursor() as (cursor, conn):
             cursor.execute(
                 "SELECT cve_id FROM cve_enriched WHERE has_snort_rules = TRUE"
+            )
+            return [row[0] for row in cursor.fetchall()]
+
+    # ==================== LLM Tagging Operations ====================
+
+    def get_untagged_cve_ids(self, limit: Optional[int] = None) -> List[str]:
+        """
+        Get CVE IDs that don't have LLM tags yet.
+
+        Args:
+            limit: Maximum number of CVE IDs to return
+
+        Returns:
+            List of CVE IDs without LLM tags
+        """
+        sql = "SELECT cve_id FROM cve_enriched WHERE llm_tagged_at IS NULL ORDER BY cve_id"
+        if limit:
+            sql += f" LIMIT {limit}"
+
+        with self.cursor() as (cursor, conn):
+            cursor.execute(sql)
+            return [row[0] for row in cursor.fetchall()]
+
+    def get_all_cve_ids(self) -> List[str]:
+        """Get all CVE IDs in the database."""
+        with self.cursor() as (cursor, conn):
+            cursor.execute("SELECT cve_id FROM cve_enriched ORDER BY cve_id")
+            return [row[0] for row in cursor.fetchall()]
+
+    def update_llm_tags_batch(self, tags_data: List[Dict[str, Any]]) -> int:
+        """
+        Update LLM tags for multiple CVEs.
+
+        Args:
+            tags_data: List of dicts with cve_id and tag fields:
+                - cve_id: str
+                - llm_tags_version: str
+                - llm_model_used: str
+                - llm_tagged_at: datetime
+                - kill_chain_phases: List[str]
+                - prerequisites: List[str]
+                - capabilities: List[str]
+                - llm_confidence_score: float
+
+        Returns:
+            Number of updated rows
+        """
+        if not tags_data:
+            return 0
+
+        sql = """
+            UPDATE cve_enriched SET
+                llm_tags_version = ?,
+                llm_model_used = ?,
+                llm_tagged_at = ?,
+                kill_chain_phases = ?,
+                prerequisites = ?,
+                capabilities = ?,
+                llm_confidence_score = ?
+            WHERE cve_id = ?
+        """
+
+        updated = 0
+        with self.connection() as conn:
+            cursor = conn.cursor()
+            try:
+                values = []
+                for data in tags_data:
+                    values.append((
+                        data.get("llm_tags_version"),
+                        data.get("llm_model_used"),
+                        data.get("llm_tagged_at"),
+                        json.dumps(data.get("kill_chain_phases", [])),
+                        json.dumps(data.get("prerequisites", [])),
+                        json.dumps(data.get("capabilities", [])),
+                        data.get("llm_confidence_score"),
+                        data.get("cve_id"),
+                    ))
+
+                cursor.executemany(sql, values)
+                conn.commit()
+                updated = cursor.rowcount
+                logger.debug(f"Updated LLM tags for {updated} CVEs")
+
+            except mariadb.Error as e:
+                logger.error(f"Error updating LLM tags: {e}")
+                conn.rollback()
+                raise
+            finally:
+                cursor.close()
+
+        return updated
+
+    def get_llm_tagging_stats(self) -> Dict[str, Any]:
+        """
+        Get statistics about LLM tagging progress.
+
+        Returns:
+            Dict with:
+                - total_cves: Total CVE count
+                - tagged_cves: CVEs with LLM tags
+                - untagged_cves: CVEs without LLM tags
+                - avg_confidence: Average confidence score
+        """
+        with self.cursor() as (cursor, conn):
+            cursor.execute("""
+                SELECT
+                    COUNT(*) as total,
+                    SUM(CASE WHEN llm_tagged_at IS NOT NULL THEN 1 ELSE 0 END) as tagged,
+                    AVG(llm_confidence_score) as avg_confidence
+                FROM cve_enriched
+            """)
+            row = cursor.fetchone()
+
+            total = row[0] or 0
+            tagged = row[1] or 0
+
+            return {
+                "total_cves": total,
+                "tagged_cves": tagged,
+                "untagged_cves": total - tagged,
+                "avg_confidence": float(row[2]) if row[2] else None,
+            }
+
+    def get_cves_by_kill_chain_phase(self, phase: str) -> List[str]:
+        """
+        Get CVE IDs that have a specific kill chain phase tag.
+
+        Args:
+            phase: The kill chain phase to search for
+
+        Returns:
+            List of CVE IDs with that phase
+        """
+        with self.cursor() as (cursor, conn):
+            # Use JSON_CONTAINS to search in the JSON array
+            cursor.execute(
+                "SELECT cve_id FROM cve_enriched WHERE JSON_CONTAINS(kill_chain_phases, ?)",
+                (json.dumps(phase),)
+            )
+            return [row[0] for row in cursor.fetchall()]
+
+    def get_cves_by_capability(self, capability: str) -> List[str]:
+        """
+        Get CVE IDs that grant a specific capability.
+
+        Args:
+            capability: The capability to search for
+
+        Returns:
+            List of CVE IDs with that capability
+        """
+        with self.cursor() as (cursor, conn):
+            cursor.execute(
+                "SELECT cve_id FROM cve_enriched WHERE JSON_CONTAINS(capabilities, ?)",
+                (json.dumps(capability),)
+            )
+            return [row[0] for row in cursor.fetchall()]
+
+    def get_cves_by_prerequisite(self, prerequisite: str) -> List[str]:
+        """
+        Get CVE IDs that require a specific prerequisite.
+
+        Args:
+            prerequisite: The prerequisite to search for
+
+        Returns:
+            List of CVE IDs with that prerequisite
+        """
+        with self.cursor() as (cursor, conn):
+            cursor.execute(
+                "SELECT cve_id FROM cve_enriched WHERE JSON_CONTAINS(prerequisites, ?)",
+                (json.dumps(prerequisite),)
             )
             return [row[0] for row in cursor.fetchall()]

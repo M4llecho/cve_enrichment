@@ -24,6 +24,15 @@ from downloaders import (
 )
 from parsers import CWEParser, CAPECParser, ATTACKParser, SigmaParser, NucleiParser, CPEParser, SnortParser
 
+# LLM Tagger (optional, may not be available)
+try:
+    from llm import CVETagger, LLMTaggerConfig
+    LLM_AVAILABLE = True
+except ImportError:
+    LLM_AVAILABLE = False
+    CVETagger = None
+    LLMTaggerConfig = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -53,6 +62,9 @@ class CVEEnricher:
         self._sigma_parser: Optional[SigmaParser] = None
         self._nuclei_parser: Optional[NucleiParser] = None
         self._snort_parser: Optional[SnortParser] = None
+
+        # LLM Tagger (lazy loaded)
+        self._llm_tagger = None
 
     def download_all_sources(self, force: bool = False) -> None:
         """Download all external data sources."""
@@ -1069,4 +1081,139 @@ class CVEEnricher:
 
         print(f"\nReferences: {cve.get('reference_count', 0)}")
         print(f"Last Enriched: {cve.get('last_enriched_at')}")
+
+        # LLM Tags section
+        if cve.get('llm_tagged_at'):
+            print(f"\n--- LLM Tags (Kill Chain) ---")
+            print(f"Model: {cve.get('llm_model_used', 'N/A')}")
+            print(f"Confidence: {cve.get('llm_confidence_score', 0):.2f}")
+            print(f"Tagged At: {cve.get('llm_tagged_at')}")
+
+            phases = cve.get('kill_chain_phases', [])
+            prereqs = cve.get('prerequisites', [])
+            caps = cve.get('capabilities', [])
+
+            if phases:
+                print(f"Kill Chain Phases: {', '.join(phases)}")
+            if prereqs:
+                print(f"Prerequisites: {', '.join(prereqs)}")
+            if caps:
+                print(f"Capabilities: {', '.join(caps)}")
+
         print(f"{'='*60}\n")
+
+    # ==================== LLM Tagger ====================
+
+    @property
+    def llm_tagger(self):
+        """Get or create LLM tagger (lazy loaded)."""
+        if self._llm_tagger is not None:
+            return self._llm_tagger
+
+        if not LLM_AVAILABLE:
+            logger.debug("LLM module not available")
+            return None
+
+        try:
+            self._llm_tagger = CVETagger()
+
+            if not self._llm_tagger.is_available():
+                logger.warning(
+                    "LLM tagger backend not available. "
+                    "Ensure Ollama is running (ollama serve) and model is pulled."
+                )
+                self._llm_tagger = None
+                return None
+
+            logger.info(f"LLM tagger initialized with model: {self._llm_tagger.config.model}")
+            return self._llm_tagger
+
+        except Exception as e:
+            logger.warning(f"Failed to initialize LLM tagger: {e}")
+            self._llm_tagger = None
+            return None
+
+    def tag_cves_with_llm(
+        self,
+        batch_size: int = 100,
+        only_untagged: bool = True,
+        limit: Optional[int] = None
+    ) -> int:
+        """
+        Tag CVEs with LLM-generated security tags for kill chain reconstruction.
+
+        Args:
+            batch_size: Number of CVEs to update per database batch
+            only_untagged: Only tag CVEs without existing LLM tags
+            limit: Maximum number of CVEs to process (None = all)
+
+        Returns:
+            Number of successfully tagged CVEs
+        """
+        logger.info("Starting LLM tagging...")
+
+        if not self.llm_tagger:
+            logger.error(
+                "LLM tagger not available. "
+                "Ensure Ollama is running (ollama serve) and model is pulled."
+            )
+            return 0
+
+        # Get CVEs to tag
+        if only_untagged:
+            cve_ids = self.db.get_untagged_cve_ids(limit=limit)
+        else:
+            cve_ids = self.db.get_all_cve_ids()
+            if limit:
+                cve_ids = cve_ids[:limit]
+
+        if not cve_ids:
+            logger.info("No CVEs to tag")
+            return 0
+
+        logger.info(f"Found {len(cve_ids)} CVEs to tag")
+
+        tagged_count = 0
+        batch = []
+
+        with tqdm(total=len(cve_ids), desc="LLM Tagging", unit="cve") as pbar:
+            for cve_id in cve_ids:
+                try:
+                    # Get enriched CVE data from database
+                    cve_data = self.db.get_enriched_cve(cve_id)
+                    if not cve_data:
+                        pbar.update(1)
+                        continue
+
+                    # Tag with LLM
+                    result = self.llm_tagger.tag_cve(cve_data)
+
+                    if result:
+                        batch.append(result)
+
+                    # Save batch to database
+                    if len(batch) >= batch_size:
+                        self.db.update_llm_tags_batch(batch)
+                        tagged_count += len(batch)
+                        batch = []
+
+                except Exception as e:
+                    logger.error(f"Error tagging {cve_id}: {e}")
+
+                pbar.update(1)
+
+        # Save remaining batch
+        if batch:
+            self.db.update_llm_tags_batch(batch)
+            tagged_count += len(batch)
+
+        # Log stats
+        stats = self.llm_tagger.get_stats()
+        logger.info(
+            f"LLM tagging complete. "
+            f"Tagged: {tagged_count}, "
+            f"Failed: {stats.get('failed_count', 0)}, "
+            f"Avg time: {stats.get('avg_time_per_cve', 0):.2f}s/cve"
+        )
+
+        return tagged_count

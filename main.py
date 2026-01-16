@@ -9,6 +9,7 @@ A comprehensive tool to enrich CVE data with:
 - SigmaHQ detection rules
 - Nuclei exploit templates
 - Snort/Suricata IDS rules (Emerging Threats Open)
+- LLM-generated kill chain tags (via Ollama)
 
 Usage:
     python main.py init                      Initialize database and download mappings
@@ -25,6 +26,8 @@ Usage:
     python main.py enrich-list file.txt      Enrich CVEs from a file
     python main.py show CVE-ID               Display enriched CVE data
     python main.py stats                     Show database statistics
+    python main.py llm-tag                   Tag CVEs with LLM for kill chain reconstruction
+    python main.py llm-status                Show LLM tagger status and progress
 
 Global flags:
     -v, --verbose                            Enable DEBUG logging
@@ -518,6 +521,232 @@ def cmd_stats(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_llm_tag(args: argparse.Namespace) -> int:
+    """Tag CVEs with LLM-generated security tags for kill chain reconstruction."""
+    from enricher import CVEEnricher
+    from database.schema import add_llm_tagging_columns
+
+    logger = logging.getLogger(__name__)
+    logger.info("Starting LLM tagging...")
+
+    try:
+        # Ensure LLM columns exist
+        add_llm_tagging_columns()
+
+        enricher = CVEEnricher()
+
+        # Check LLM availability
+        if not enricher.llm_tagger:
+            logger.error(
+                "LLM tagger not available. "
+                "Ensure Ollama is running: ollama serve\n"
+                "And model is pulled: ollama pull llama3.2:8b"
+            )
+            return 1
+
+        health = enricher.llm_tagger.health_check()
+        backend_info = health.get("backend", {})
+        logger.info(
+            f"LLM Backend: {backend_info.get('backend', 'Unknown')}, "
+            f"Model: {backend_info.get('model', 'Unknown')}"
+        )
+
+        count = enricher.tag_cves_with_llm(
+            batch_size=args.batch_size,
+            only_untagged=not args.retag_all,
+            limit=args.limit
+        )
+
+        logger.info(f"LLM tagging complete. Tagged {count} CVEs")
+        return 0
+
+    except Exception as e:
+        logger.error(f"LLM tagging failed: {e}")
+        return 1
+
+
+def cmd_llm_status(args: argparse.Namespace) -> int:
+    """Show LLM tagger status and statistics."""
+    from enricher import CVEEnricher
+    from database.schema import add_llm_tagging_columns
+
+    try:
+        # Ensure columns exist for stats query
+        add_llm_tagging_columns()
+
+        enricher = CVEEnricher()
+
+        print("\n=== LLM Tagger Status ===\n")
+
+        if enricher.llm_tagger:
+            health = enricher.llm_tagger.health_check()
+            backend = health.get("backend", {})
+
+            status = "Available" if backend.get("available") else "NOT Available"
+            print(f"Status: {status}")
+            print(f"Backend: {backend.get('backend', 'Unknown')}")
+            print(f"Model: {backend.get('model', 'Unknown')}")
+            print(f"Taxonomy Version: {health.get('taxonomy_version', 'Unknown')}")
+
+            if backend.get("error"):
+                print(f"Error: {backend['error']}")
+        else:
+            print("Status: NOT Available")
+            print("LLM module not loaded or Ollama not running")
+            print("\nTo enable LLM tagging:")
+            print("  1. Install Ollama: curl -fsSL https://ollama.com/install.sh | sh")
+            print("  2. Start Ollama: ollama serve")
+            print("  3. Pull a model: ollama pull llama3.2:8b")
+
+        # DB stats
+        llm_stats = enricher.db.get_llm_tagging_stats()
+        print(f"\n=== Tagging Progress ===")
+        print(f"Total CVEs: {llm_stats['total_cves']:,}")
+        print(f"Tagged: {llm_stats['tagged_cves']:,}")
+        print(f"Untagged: {llm_stats['untagged_cves']:,}")
+
+        print()
+        return 0
+
+    except Exception as e:
+        logging.error(f"Failed to get LLM status: {e}")
+        return 1
+
+
+def cmd_llm_tag_cve(args: argparse.Namespace) -> int:
+    """Tag a single CVE with LLM-generated security tags."""
+    from enricher import CVEEnricher
+    from database.schema import add_llm_tagging_columns
+
+    logger = logging.getLogger(__name__)
+    cve_id = args.cve_id.upper()
+
+    if not cve_id.startswith("CVE-"):
+        cve_id = f"CVE-{cve_id}"
+
+    logger.info(f"Tagging {cve_id} with LLM...")
+
+    try:
+        # Ensure LLM columns exist
+        add_llm_tagging_columns()
+
+        enricher = CVEEnricher()
+
+        # Check LLM availability
+        if not enricher.llm_tagger:
+            logger.error(
+                "LLM tagger not available. "
+                "Ensure Ollama is running: ollama serve"
+            )
+            return 1
+
+        # Get CVE data from database
+        cve_data = enricher.db.get_enriched_cve(cve_id)
+        if not cve_data:
+            logger.error(f"CVE {cve_id} not found in database. Run 'enrich-cve {cve_id}' first.")
+            return 1
+
+        # Tag with LLM
+        result = enricher.llm_tagger.tag_cve(cve_data)
+
+        if result:
+            # Save to database
+            enricher.db.update_llm_tags_batch([result])
+
+            print(f"\n=== LLM Tags for {cve_id} ===\n")
+            print(f"Kill Chain Phases: {', '.join(result['kill_chain_phases']) or 'None'}")
+            print(f"Prerequisites: {', '.join(result['prerequisites']) or 'None'}")
+            print(f"Capabilities: {', '.join(result['capabilities']) or 'None'}")
+            print(f"\nModel: {result['llm_model_used']}")
+            print(f"Taxonomy: {result['llm_tags_version']}")
+            print()
+            return 0
+        else:
+            logger.error(f"Failed to tag {cve_id}")
+            return 1
+
+    except Exception as e:
+        logger.error(f"LLM tagging failed for {cve_id}: {e}")
+        return 1
+
+
+def cmd_llm_tag_list(args: argparse.Namespace) -> int:
+    """Tag CVEs from a file with LLM-generated security tags."""
+    from enricher import CVEEnricher
+    from database.schema import add_llm_tagging_columns
+
+    logger = logging.getLogger(__name__)
+    file_path = Path(args.file)
+
+    if not file_path.exists():
+        logger.error(f"File not found: {file_path}")
+        return 1
+
+    try:
+        # Ensure LLM columns exist
+        add_llm_tagging_columns()
+
+        # Read CVE IDs from file
+        with open(file_path, "r") as f:
+            cve_ids = []
+            for line in f:
+                cve_id = line.strip().upper()
+                if cve_id and not cve_id.startswith("#"):
+                    if not cve_id.startswith("CVE-"):
+                        cve_id = f"CVE-{cve_id}"
+                    cve_ids.append(cve_id)
+
+        if not cve_ids:
+            logger.error("No CVE IDs found in file")
+            return 1
+
+        logger.info(f"Found {len(cve_ids)} CVE IDs in file")
+
+        enricher = CVEEnricher()
+
+        # Check LLM availability
+        if not enricher.llm_tagger:
+            logger.error(
+                "LLM tagger not available. "
+                "Ensure Ollama is running: ollama serve"
+            )
+            return 1
+
+        tagged_count = 0
+        failed_count = 0
+
+        for i, cve_id in enumerate(cve_ids, 1):
+            logger.info(f"[{i}/{len(cve_ids)}] Tagging {cve_id}...")
+
+            # Get CVE data from database
+            cve_data = enricher.db.get_enriched_cve(cve_id)
+            if not cve_data:
+                logger.warning(f"CVE {cve_id} not found in database. Skipping.")
+                failed_count += 1
+                continue
+
+            # Tag with LLM
+            result = enricher.llm_tagger.tag_cve(cve_data)
+
+            if result:
+                # Save to database
+                enricher.db.update_llm_tags_batch([result])
+                tagged_count += 1
+
+                print(f"  {cve_id}: phases={result['kill_chain_phases']}, "
+                      f"prereq={result['prerequisites']}, caps={result['capabilities']}")
+            else:
+                logger.warning(f"Failed to tag {cve_id}")
+                failed_count += 1
+
+        logger.info(f"LLM tagging complete. Tagged: {tagged_count}, Failed: {failed_count}")
+        return 0 if tagged_count > 0 else 1
+
+    except Exception as e:
+        logger.error(f"LLM tagging failed: {e}")
+        return 1
+
+
 def main() -> int:
     """Main entry point."""
     parser = argparse.ArgumentParser(
@@ -719,6 +948,63 @@ def main() -> int:
     )
     stats_parser.set_defaults(func=cmd_stats)
 
+    # LLM Tag command
+    llm_tag_parser = subparsers.add_parser(
+        "llm-tag",
+        aliases=["--llm-tag"],
+        help="Tag CVEs with LLM-generated security tags for kill chain reconstruction"
+    )
+    llm_tag_parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=100,
+        help="Batch size for database updates (default: 100)"
+    )
+    llm_tag_parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Maximum number of CVEs to tag (default: all untagged)"
+    )
+    llm_tag_parser.add_argument(
+        "--retag-all",
+        action="store_true",
+        help="Re-tag all CVEs, not just untagged ones"
+    )
+    llm_tag_parser.set_defaults(func=cmd_llm_tag)
+
+    # LLM Status command
+    llm_status_parser = subparsers.add_parser(
+        "llm-status",
+        aliases=["--llm-status"],
+        help="Show LLM tagger status and statistics"
+    )
+    llm_status_parser.set_defaults(func=cmd_llm_status)
+
+    # LLM Tag Single CVE command
+    llm_tag_cve_parser = subparsers.add_parser(
+        "llm-tag-cve",
+        aliases=["--llm-tag-cve"],
+        help="Tag a single CVE with LLM-generated security tags"
+    )
+    llm_tag_cve_parser.add_argument(
+        "cve_id",
+        help="CVE identifier (e.g., CVE-2021-44228)"
+    )
+    llm_tag_cve_parser.set_defaults(func=cmd_llm_tag_cve)
+
+    # LLM Tag List command
+    llm_tag_list_parser = subparsers.add_parser(
+        "llm-tag-list",
+        aliases=["--llm-tag-list"],
+        help="Tag CVEs from a file with LLM-generated security tags"
+    )
+    llm_tag_list_parser.add_argument(
+        "file",
+        help="File containing CVE IDs (one per line)"
+    )
+    llm_tag_list_parser.set_defaults(func=cmd_llm_tag_list)
+
     args = parser.parse_args()
 
     # Setup logging
@@ -796,6 +1082,17 @@ def main() -> int:
             elif arg == "--stats":
                 args.command = "stats"
                 args.func = cmd_stats
+                break
+            elif arg == "--llm-tag":
+                args.command = "llm-tag"
+                args.func = cmd_llm_tag
+                args.batch_size = 100
+                args.limit = None
+                args.retag_all = False
+                break
+            elif arg == "--llm-status":
+                args.command = "llm-status"
+                args.func = cmd_llm_status
                 break
 
     if args.command is None or not hasattr(args, 'func'):

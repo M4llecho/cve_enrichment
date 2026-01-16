@@ -11,6 +11,7 @@ Sistema completo per arricchire CVE con dati da fonti esterne e salvarli in Mari
 - **Sigma Detection Rules**: regole di detection da SigmaHQ associate alle CVE
 - **Nuclei Templates**: exploit templates da ProjectDiscovery associati alle CVE
 - **Snort/Suricata IDS Rules**: regole IDS/IPS da Emerging Threats Open associate alle CVE
+- **LLM Kill Chain Tagging**: classificazione automatica delle CVE per ricostruzione killchain con LLM locale (Ollama)
 
 ## Requisiti
 
@@ -243,6 +244,86 @@ python main.py stats
 | `enrich-list <file>` | Arricchisce CVE da file |
 | `show <CVE-ID>` | Mostra dati di una CVE |
 | `stats` | Mostra statistiche database |
+| `llm-tag` | Tag bulk di tutte le CVE non taggate con LLM |
+| `llm-tag-cve <CVE-ID>` | Tag singola CVE con LLM |
+| `llm-tag-list <file>` | Tag CVE da file con LLM |
+| `llm-status` | Stato del tagger LLM |
+
+## LLM Kill Chain Tagging
+
+Il sistema supporta la classificazione automatica delle CVE per la ricostruzione di killchain usando un LLM locale tramite Ollama.
+
+### Requisiti LLM
+
+```bash
+# Installa Ollama
+curl -fsSL https://ollama.com/install.sh | sh
+
+# Avvia Ollama
+ollama serve
+
+# Scarica modello consigliato
+ollama pull deepseek-r1:8b
+```
+
+### Configurazione LLM
+
+Variabili d'ambiente opzionali:
+
+```env
+CVE_LLM_BACKEND=ollama          # Backend (default: ollama)
+CVE_LLM_MODEL=deepseek-r1:8b    # Modello da usare
+CVE_LLM_URL=http://localhost:11434  # URL Ollama
+CVE_LLM_TIMEOUT=120             # Timeout in secondi
+```
+
+### Comandi LLM Tagging
+
+```bash
+# Verifica stato LLM
+python main.py llm-status
+
+# Tag singola CVE
+python main.py llm-tag-cve CVE-2021-44228
+
+# Tag CVE da file (una per riga)
+python main.py llm-tag-list cve_list.txt
+
+# Tag bulk di tutte le CVE non taggate
+python main.py llm-tag --limit 100
+
+# Re-tag tutte le CVE (anche quelle già taggate)
+python main.py llm-tag --retag-all --limit 50
+```
+
+### Tassonomia Tag
+
+Il sistema assegna tag in 3 categorie per ogni CVE:
+
+**Kill Chain Phases** (12 tag) - Fasi ATT&CK:
+- `initial_access`, `execution`, `persistence`, `privilege_escalation`
+- `defense_evasion`, `credential_access`, `discovery`, `lateral_movement`
+- `collection`, `exfiltration`, `command_and_control`, `impact`
+
+**Prerequisites** (6 tag) - Input per chaining:
+- `requires_network`, `requires_local`, `requires_auth`
+- `requires_user_interaction`, `requires_privilege`, `requires_physical`
+
+**Capabilities** (8 tag) - Output per chaining:
+- `grants_code_execution`, `grants_admin_access`, `grants_user_access`
+- `grants_credential_access`, `grants_network_pivot`, `grants_persistence`
+- `grants_data_access`, `grants_dos`
+
+### Ricostruzione Kill Chain
+
+I tag permettono di ricostruire killchain collegando CVE:
+- **CVE-A → CVE-B** se `capabilities(A)` soddisfa `prerequisites(B)`
+
+Esempio:
+```
+Log4Shell (initial_access)     PrintNightmare (priv_escalation)
+  Output: grants_admin_access  →  Input: requires_network ✓
+```
 
 ## Schema Database
 
@@ -279,6 +360,8 @@ cve_enriched (
     has_detection_rules, detection_rules_count, detection_rules,
     has_nuclei_template, nuclei_template_count, nuclei_templates,
     has_snort_rules, snort_rules_count, snort_rules,
+    llm_tags_version, llm_model_used, llm_tagged_at,
+    kill_chain_phases, prerequisites, capabilities,
     last_enriched_at
 )
 ```
@@ -314,6 +397,17 @@ cve_enriched (
 | `has_snort_rules` | BOOLEAN | True se esistono regole Snort/Suricata per questa CVE |
 | `snort_rules_count` | INT | Numero di regole IDS associate |
 | `snort_rules` | JSON | Array di regole: `[{"sid", "msg", "classtype", "severity", "filename"}]` |
+
+#### Campi LLM Kill Chain Tagging
+
+| Campo | Tipo | Descrizione |
+|-------|------|-------------|
+| `llm_tags_version` | VARCHAR(20) | Versione della tassonomia usata (es. "1.0.0") |
+| `llm_model_used` | VARCHAR(100) | Modello LLM usato per il tagging |
+| `llm_tagged_at` | DATETIME | Timestamp del tagging LLM |
+| `kill_chain_phases` | JSON | Array fasi kill chain: `["initial_access", "execution"]` |
+| `prerequisites` | JSON | Array prerequisiti: `["requires_network"]` |
+| `capabilities` | JSON | Array capabilities: `["grants_admin_access", "grants_code_execution"]` |
 
 ## Fonti Dati
 
