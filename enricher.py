@@ -1084,9 +1084,9 @@ class CVEEnricher:
 
         # LLM Tags section
         if cve.get('llm_tagged_at'):
-            print(f"\n--- LLM Tags (Kill Chain) ---")
+            print(f"\n--- LLM Kill Chain Tags ---")
             print(f"Model: {cve.get('llm_model_used', 'N/A')}")
-            print(f"Confidence: {cve.get('llm_confidence_score', 0):.2f}")
+            print(f"Taxonomy: {cve.get('llm_tags_version', 'N/A')}")
             print(f"Tagged At: {cve.get('llm_tagged_at')}")
 
             phases = cve.get('kill_chain_phases', [])

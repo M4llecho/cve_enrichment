@@ -499,5 +499,13 @@ Has Rules: Yes (3 rules)
 
 References: 25
 Last Enriched: 2024-01-15 14:30:00
+
+--- LLM Kill Chain Tags ---
+Model: deepseek-r1:8b
+Taxonomy: 1.0.0
+Tagged At: 2024-01-15 15:00:00
+Kill Chain Phases: initial_access, execution
+Prerequisites: requires_network
+Capabilities: grants_admin_access, grants_code_execution
 ============================================================
 ```
