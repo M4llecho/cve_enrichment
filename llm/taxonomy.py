@@ -58,7 +58,7 @@ KILL_CHAIN_PHASES = TagCategory(
 
 
 # =============================================================================
-# PREREQUISITES (6 tags)
+# PREREQUISITES (7 tags)
 # What's needed to exploit this CVE - INPUT for chaining
 # =============================================================================
 
@@ -72,6 +72,7 @@ PREREQUISITES = TagCategory(
         "requires_user_interaction": "User must perform an action (click, open file)",
         "requires_privilege": "Already elevated privileges required",
         "requires_physical": "Physical access to the device required",
+        "requires_outbound_connectivity": "Target must initiate connections to attacker (LDAP, reverse shell, HTTP callback)",
     }
 )
 

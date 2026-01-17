@@ -5,6 +5,13 @@ LLM Configuration for CVE Tagger.
 import os
 from dataclasses import dataclass, field
 
+# Load .env file before reading environment variables
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 from .base import LLMConfig
 
 
@@ -15,14 +22,23 @@ ENV_LLM_URL = "CVE_LLM_URL"
 ENV_LLM_TEMPERATURE = "CVE_LLM_TEMPERATURE"
 ENV_LLM_TIMEOUT = "CVE_LLM_TIMEOUT"
 
+# API backend environment variables
+ENV_LLM_API_PROVIDER = "CVE_LLM_API_PROVIDER"
+ENV_LLM_API_KEY = "CVE_LLM_API_KEY"
+
 
 @dataclass
 class LLMTaggerConfig:
     """Configuration for the LLM tagger system."""
 
-    # Backend selection: "ollama" or "llamacpp"
+    # Backend selection: "ollama", "llamacpp", or "api"
     backend: str = field(
         default_factory=lambda: os.getenv(ENV_LLM_BACKEND, "ollama")
+    )
+
+    # API provider (only used when backend="api"): gemini, deepseek, openai, anthropic, groq
+    api_provider: str = field(
+        default_factory=lambda: os.getenv(ENV_LLM_API_PROVIDER, "gemini")
     )
 
     # Model configuration
@@ -78,10 +94,20 @@ RECOMMENDED_MODELS = {
         "gemma-3-12b-instruct.gguf",
         "qwen2.5-7b-instruct.gguf",
     ],
+    "api": {
+        "gemini": "gemini-2.5-flash",       # Best value: $0.15/$0.60 per MTok
+        "deepseek": "deepseek-chat",        # Cheapest: $0.28/$0.42 per MTok
+        "openai": "gpt-4o",                 # Premium: $2.50/$10 per MTok
+        "anthropic": "claude-3-5-haiku-latest",  # Quality: $0.80/$4 per MTok
+        "groq": "llama-3.3-70b-versatile",  # Fastest: $0.59/$0.79 per MTok
+    },
 }
 
 
-def get_recommended_model(backend: str = "ollama") -> str:
+def get_recommended_model(backend: str = "ollama", api_provider: str = "gemini") -> str:
     """Get recommended model for the specified backend."""
+    if backend == "api":
+        api_models = RECOMMENDED_MODELS.get("api", {})
+        return api_models.get(api_provider, "gemini-2.5-flash")
     models = RECOMMENDED_MODELS.get(backend, [])
     return models[0] if models else "gemma3:12b"

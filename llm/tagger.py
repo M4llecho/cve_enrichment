@@ -18,8 +18,8 @@ from typing import Any, Callable, Dict, List, Optional
 
 from .base import BaseLLMBackend, LLMConfig
 from .config import LLMTaggerConfig, DEFAULT_CONFIG
-from .ollama_backend import OllamaBackend
 from .prompts import SYSTEM_PROMPT, build_cve_analysis_prompt
+from .prompts_api import API_SYSTEM_PROMPT, build_api_analysis_prompt
 from .taxonomy import TAXONOMY_VERSION, validate_tags_by_category
 from .validator import validate_tag_coherence
 
@@ -45,11 +45,21 @@ class CVETagger:
         Initialize the CVE Tagger.
 
         Args:
-            backend: LLM backend to use. If None, creates OllamaBackend.
+            backend: LLM backend to use. If None, creates from config.
             config: Tagger configuration. If None, uses defaults.
+
+        The backend is selected based on CVE_LLM_BACKEND environment variable:
+        - "ollama" (default): Use local Ollama
+        - "api": Use cloud API (Gemini, DeepSeek, OpenAI, Anthropic, Groq)
         """
         self.config = config or DEFAULT_CONFIG
-        self.backend = backend or OllamaBackend(self.config.to_llm_config())
+
+        if backend is None:
+            # Import here to avoid circular imports
+            from . import create_backend
+            self.backend = create_backend(config=self.config)
+        else:
+            self.backend = backend
         self._stats = {
             "tagged_count": 0,
             "failed_count": 0,
@@ -91,11 +101,17 @@ class CVETagger:
         try:
             start_time = time.time()
 
-            # Build prompt
-            prompt = build_cve_analysis_prompt(cve_data)
+            # Build prompt based on backend type
+            # API backends get enhanced prompts that leverage their superior reasoning
+            if self.config.backend == "api":
+                prompt = build_api_analysis_prompt(cve_data)
+                system_prompt = API_SYSTEM_PROMPT
+            else:
+                prompt = build_cve_analysis_prompt(cve_data)
+                system_prompt = SYSTEM_PROMPT
 
             # Generate response
-            response = self.backend.generate(prompt, SYSTEM_PROMPT)
+            response = self.backend.generate(prompt, system_prompt)
 
             # Parse response
             tags = self._parse_response(response.text)
@@ -112,12 +128,22 @@ class CVETagger:
             cvss_vector = cve_data.get("cvss_vector")
             coherent_tags = validate_tag_coherence(validated_tags, cvss_vector)
 
-            # Build result (no confidence - it was LLM self-generated and unreliable)
+            # Extract confidence score from LLM response (API backend only)
+            confidence = tags.get("confidence")
+            if confidence is not None:
+                try:
+                    confidence = float(confidence)
+                    confidence = max(0.0, min(1.0, confidence))  # Clamp to 0-1
+                except (TypeError, ValueError):
+                    confidence = None
+
+            # Build result
             result = {
                 "cve_id": cve_id,
                 "llm_tags_version": TAXONOMY_VERSION,
-                "llm_model_used": self.config.model,
+                "llm_model_used": self.backend.config.model,
                 "llm_tagged_at": datetime.now(),
+                "llm_confidence_score": confidence,
                 "kill_chain_phases": coherent_tags.get("kill_chain_phases", []),
                 "prerequisites": coherent_tags.get("prerequisites", []),
                 "capabilities": coherent_tags.get("capabilities", []),

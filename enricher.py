@@ -1125,7 +1125,7 @@ class CVEEnricher:
                 self._llm_tagger = None
                 return None
 
-            logger.info(f"LLM tagger initialized with model: {self._llm_tagger.config.model}")
+            logger.info(f"LLM tagger initialized with backend: {self._llm_tagger.config.backend}, model: {self._llm_tagger.backend.config.model}")
             return self._llm_tagger
 
         except Exception as e:
@@ -1215,5 +1215,107 @@ class CVEEnricher:
             f"Failed: {stats.get('failed_count', 0)}, "
             f"Avg time: {stats.get('avg_time_per_cve', 0):.2f}s/cve"
         )
+
+        return tagged_count
+
+    async def tag_cves_with_llm_async(
+        self,
+        batch_size: int = 100,
+        only_untagged: bool = True,
+        limit: Optional[int] = None,
+        concurrency: int = 10,
+        use_context_cache: bool = True,
+    ) -> int:
+        """
+        Tag CVEs with LLM using async/parallel processing.
+
+        This method uses the AsyncGeminiBackend for high-throughput tagging
+        with rate limiting and exponential backoff.
+
+        Args:
+            batch_size: Batch size for database updates
+            only_untagged: Only tag CVEs without existing tags
+            limit: Maximum number of CVEs to tag
+            concurrency: Maximum parallel API requests
+            use_context_cache: Use Gemini context caching (reduces costs)
+
+        Returns:
+            Number of successfully tagged CVEs
+        """
+        from llm.gemini_async import AsyncGeminiBackend
+
+        # Get CVE IDs to process
+        if only_untagged:
+            cve_ids = self.db.get_untagged_cve_ids(limit=limit)
+        else:
+            cve_ids = self.db.get_all_cve_ids()
+            if limit:
+                cve_ids = cve_ids[:limit]
+
+        if not cve_ids:
+            logger.info("No CVEs to tag")
+            return 0
+
+        logger.info(f"Starting async LLM tagging for {len(cve_ids)} CVEs (concurrency={concurrency})")
+
+        tagged_count = 0
+        failed_count = 0
+
+        async with AsyncGeminiBackend() as backend:
+            # Process in batches for DB updates
+            from tqdm.asyncio import tqdm as async_tqdm
+
+            with async_tqdm(total=len(cve_ids), desc="Async LLM Tagging", unit="cve") as pbar:
+                for i in range(0, len(cve_ids), batch_size):
+                    batch_ids = cve_ids[i:i + batch_size]
+
+                    # Fetch CVE data for this batch
+                    cve_data_list = []
+                    for cve_id in batch_ids:
+                        cve_data = self.db.get_enriched_cve(cve_id)
+                        if cve_data:
+                            cve_data_list.append(cve_data)
+
+                    if not cve_data_list:
+                        pbar.update(len(batch_ids))
+                        continue
+
+                    # Tag batch asynchronously
+                    results = await backend.tag_cves_batch(
+                        cve_data_list,
+                        concurrency=concurrency,
+                        use_context_cache=use_context_cache,
+                    )
+
+                    # Collect successful results for DB update
+                    successful_tags = []
+                    for result in results:
+                        if result.success and result.tags:
+                            successful_tags.append(result.tags)
+                            tagged_count += 1
+                        else:
+                            failed_count += 1
+                            if result.error:
+                                logger.debug(f"Failed to tag {result.cve_id}: {result.error}")
+
+                    # Save to database
+                    if successful_tags:
+                        self.db.update_llm_tags_batch(successful_tags)
+
+                    pbar.update(len(batch_ids))
+
+            # Log final stats
+            stats = backend.get_stats()
+            logger.info(
+                f"Async LLM tagging complete. "
+                f"Tagged: {tagged_count}, "
+                f"Failed: {failed_count}, "
+                f"Total tokens: {stats.get('total_tokens', 0):,}, "
+                f"Avg time: {stats.get('avg_time_per_request', 0):.2f}s/cve, "
+                f"Retries: {stats.get('retries', 0)}"
+            )
+
+            # Print detailed cost report
+            print("\n" + backend.format_cost_report())
 
         return tagged_count

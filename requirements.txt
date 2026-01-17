@@ -17,3 +17,9 @@ python-dotenv>=1.0.0
 
 # Progress bar
 tqdm>=4.65.0
+
+# Async HTTP (for high-throughput LLM tagging)
+aiohttp>=3.9.0
+
+# Retry with exponential backoff
+tenacity>=8.2.0

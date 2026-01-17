@@ -657,6 +657,12 @@ def cmd_llm_tag_cve(args: argparse.Namespace) -> int:
             print(f"Kill Chain Phases: {', '.join(result['kill_chain_phases']) or 'None'}")
             print(f"Prerequisites: {', '.join(result['prerequisites']) or 'None'}")
             print(f"Capabilities: {', '.join(result['capabilities']) or 'None'}")
+
+            confidence = result.get('llm_confidence_score')
+            if confidence is not None:
+                confidence_pct = int(confidence * 100)
+                print(f"Confidence: {confidence_pct}%")
+
             print(f"\nModel: {result['llm_model_used']}")
             print(f"Taxonomy: {result['llm_tags_version']}")
             print()
@@ -744,6 +750,42 @@ def cmd_llm_tag_list(args: argparse.Namespace) -> int:
 
     except Exception as e:
         logger.error(f"LLM tagging failed: {e}")
+        return 1
+
+
+def cmd_llm_tag_async(args: argparse.Namespace) -> int:
+    """Tag CVEs with LLM using async/parallel processing for high throughput."""
+    import asyncio
+    from enricher import CVEEnricher
+    from database.schema import add_llm_tagging_columns
+
+    logger = logging.getLogger(__name__)
+    logger.info("Starting async LLM tagging...")
+
+    try:
+        # Ensure LLM columns exist
+        add_llm_tagging_columns()
+
+        enricher = CVEEnricher()
+
+        # Run async tagging
+        count = asyncio.run(
+            enricher.tag_cves_with_llm_async(
+                batch_size=args.batch_size,
+                only_untagged=not args.retag_all,
+                limit=args.limit,
+                concurrency=args.concurrency,
+                use_context_cache=not args.no_cache,
+            )
+        )
+
+        logger.info(f"Async LLM tagging complete. Tagged {count} CVEs")
+        return 0 if count > 0 else 1
+
+    except Exception as e:
+        logger.error(f"Async LLM tagging failed: {e}")
+        import traceback
+        traceback.print_exc()
         return 1
 
 
@@ -1004,6 +1046,42 @@ def main() -> int:
         help="File containing CVE IDs (one per line)"
     )
     llm_tag_list_parser.set_defaults(func=cmd_llm_tag_list)
+
+    # LLM Tag Async command (high-throughput parallel processing)
+    llm_tag_async_parser = subparsers.add_parser(
+        "llm-tag-async",
+        aliases=["--llm-tag-async"],
+        help="Tag CVEs with async/parallel processing (high throughput)"
+    )
+    llm_tag_async_parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=100,
+        help="Batch size for database updates (default: 100)"
+    )
+    llm_tag_async_parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Maximum number of CVEs to tag (default: all untagged)"
+    )
+    llm_tag_async_parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=10,
+        help="Maximum parallel API requests (default: 10, max recommended: 50)"
+    )
+    llm_tag_async_parser.add_argument(
+        "--retag-all",
+        action="store_true",
+        help="Re-tag all CVEs, not just untagged ones"
+    )
+    llm_tag_async_parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Disable context caching (not recommended, increases costs)"
+    )
+    llm_tag_async_parser.set_defaults(func=cmd_llm_tag_async)
 
     args = parser.parse_args()
 

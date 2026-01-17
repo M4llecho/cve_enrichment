@@ -7,5 +7,7 @@ cache/
 *.db
 
 # LLM module
-llm/prompts_bk.py
+llm/*_bk.py               # Pattern per backup files
+llm/*_backup.py           # Pattern per backup files
+llm/test_*.py             # Pattern per script test
 llm/*:Zone.Identifier

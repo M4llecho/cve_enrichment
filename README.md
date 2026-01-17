@@ -11,7 +11,7 @@ Sistema completo per arricchire CVE con dati da fonti esterne e salvarli in Mari
 - **Sigma Detection Rules**: regole di detection da SigmaHQ associate alle CVE
 - **Nuclei Templates**: exploit templates da ProjectDiscovery associati alle CVE
 - **Snort/Suricata IDS Rules**: regole IDS/IPS da Emerging Threats Open associate alle CVE
-- **LLM Kill Chain Tagging**: classificazione automatica delle CVE per ricostruzione killchain con LLM locale (Ollama)
+- **LLM Kill Chain Tagging**: classificazione automatica delle CVE per ricostruzione killchain con LLM (Ollama o API cloud)
 
 ## Requisiti
 
@@ -251,10 +251,11 @@ python main.py stats
 
 ## LLM Kill Chain Tagging
 
-Il sistema supporta la classificazione automatica delle CVE per la ricostruzione di killchain usando un LLM locale tramite Ollama.
+Il sistema supporta la classificazione automatica delle CVE per la ricostruzione di killchain usando LLM (Ollama locale o API cloud).
 
 ### Requisiti LLM
 
+**Opzione A: Ollama (locale)**
 ```bash
 # Installa Ollama
 curl -fsSL https://ollama.com/install.sh | sh
@@ -266,15 +267,33 @@ ollama serve
 ollama pull deepseek-r1:8b
 ```
 
+**Opzione B: API Cloud**
+Alternativa senza installazione locale: usa API cloud di Gemini, DeepSeek, OpenAI, Anthropic o Groq. Richiede solo una API key del provider scelto.
+
 ### Configurazione LLM
 
-Variabili d'ambiente opzionali:
+Variabili d'ambiente in `.env`:
 
 ```env
-CVE_LLM_BACKEND=ollama          # Backend (default: ollama)
-CVE_LLM_MODEL=deepseek-r1:8b    # Modello da usare
-CVE_LLM_URL=http://localhost:11434  # URL Ollama
-CVE_LLM_TIMEOUT=120             # Timeout in secondi
+# Backend: "ollama" (locale) o "api" (cloud)
+CVE_LLM_BACKEND=ollama
+
+# Se backend=api, scegli provider: gemini, deepseek, openai, anthropic, groq
+CVE_LLM_API_PROVIDER=gemini
+
+# API Keys (solo quella del provider scelto)
+GEMINI_API_KEY=
+DEEPSEEK_API_KEY=
+OPENAI_API_KEY=
+ANTHROPIC_API_KEY=
+GROQ_API_KEY=
+
+# Ollama settings (solo se backend=ollama)
+CVE_LLM_URL=http://localhost:11434
+CVE_LLM_MODEL=deepseek-r1:8b
+
+# Timeout per le richieste LLM
+CVE_LLM_TIMEOUT=120
 ```
 
 ### Comandi LLM Tagging
